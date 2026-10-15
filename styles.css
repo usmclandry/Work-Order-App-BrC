@@ -1,0 +1,128 @@
+:root {
+  color: #1c1915;
+  background: #f3efe6;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+* { box-sizing: border-box; }
+
+body { margin: 0; }
+
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button { cursor: pointer; }
+
+#app {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1rem 1rem 3rem;
+}
+
+header {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.row, .filters, .actions, .nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+h1, h2, h3 { margin: 0; }
+
+h1 { font-size: 1.4rem; }
+
+h2 { font-size: 1.15rem; }
+
+label { display: grid; gap: 0.25rem; font-weight: 600; }
+
+input, select, textarea {
+  width: 100%;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid #c9c1b4;
+  border-radius: 0.6rem;
+  background: #fff;
+}
+
+textarea { min-height: 6rem; resize: vertical; }
+
+button, .button {
+  min-height: 2.75rem;
+  padding: 0.55rem 0.9rem;
+  border: 0;
+  border-radius: 0.6rem;
+  background: #0f6b4c;
+  color: #fff;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+button.secondary, .button.secondary { background: #fff; color: #1c1915; border: 1px solid #c9c1b4; }
+
+button.danger { background: #8f2d2d; }
+
+button:disabled { opacity: 0.55; cursor: wait; }
+
+.nav button[aria-current="page"] { outline: 2px solid #1c1915; }
+
+.card, form.card, .banner {
+  background: #fff;
+  border-radius: 0.8rem;
+  padding: 0.9rem;
+  margin: 0.7rem 0;
+}
+
+.card { display: grid; gap: 0.35rem; }
+
+button.card, .card-button {
+  width: 100%;
+  text-align: left;
+  background: #fff;
+  color: #1c1915;
+  border: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.meta, .activity, .muted { color: #5c564c; font-weight: 400; }
+
+.banner.error { background: #f8e6e6; }
+.banner.ok { background: #e5f4ee; }
+
+.chip {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: #efe8da;
+  font-size: 0.85rem;
+}
+
+.chip.overdue { background: #f3d2b5; }
+.chip.retired, .chip.canceled { background: #e6e1d8; }
+.chip.done { background: #d9eee4; }
+
+.filters label { flex: 1 1 9rem; font-weight: 600; }
+
+dialog {
+  border: 0;
+  border-radius: 0.8rem;
+  padding: 1rem;
+  max-width: 24rem;
+  width: calc(100% - 2rem);
+}
+
+dialog::backdrop { background: rgba(28, 25, 21, 0.45); }
+
+ul { margin: 0.3rem 0; padding-left: 1.1rem; }
+
+.file-row, .activity li { margin: 0.35rem 0; }

@@ -15,4 +15,4 @@ The token stays in the browser. The page asks GitHub who the token belongs to an
 
 Create the token from the private repo's README. Sign out deletes it from this device.
 
-The page has no third-party scripts. `model.js`, `github.js`, and `app.js` are loaded with `?v=1`. Raise that number when you publish a change so phones pick up the new page.
+The page has no third-party scripts. `styles.css` and `app.js` are loaded with `?v=2`. `model.js` and `github.js` are loaded with `?v=1`. Raise those numbers when you publish a change so phones pick up the new page.

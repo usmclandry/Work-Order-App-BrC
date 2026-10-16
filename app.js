@@ -137,7 +137,7 @@
 
   function signIn() {
     var repo = esc(localStorage.getItem(REPO_KEY) || "");
-    return "<header><h1>Job site work orders</h1></header>" +
+    return "<header class=\"mast\"><h1>Job site work orders</h1></header>" +
       banner() +
       "<form class=\"card\" id=\"sign-in\">" +
       "<label>Private repo<input id=\"repo\" name=\"repo\" required placeholder=\"owner/job-site-work-orders\" value=\"" + repo + "\"></label>" +
@@ -150,15 +150,15 @@
   function shell(body) {
     var current = data();
       var listing = view.name === "orders" || view.name === "equipment";
-      return "<header>" +
-      "<div class=\"row\"><h1>Job site</h1><span>" + esc(nameOf(user.id)) + "</span>" +
+      return "<header class=\"app-header\">" +
+      "<div class=\"topbar\"><div><h1>Job site</h1><p class=\"who\">" + esc(nameOf(user.id)) + "</p></div>" +
       "<button type=\"button\" class=\"secondary\" data-action=\"sign-out\">Sign out</button></div>" +
-      "<label>Search<input id=\"search\" value=\"" + esc(search) + "\" placeholder=\"Orders, equipment, notes\"></label>" +
+      "<label class=\"search\">Search<input id=\"search\" value=\"" + esc(search) + "\" placeholder=\"Orders, equipment, notes\"></label>" +
       "<nav class=\"nav\">" +
       "<button type=\"button\" data-action=\"nav\" data-view=\"orders\"" + (view.name === "orders" ? " aria-current=\"page\"" : "") + ">Orders</button>" +
       "<button type=\"button\" data-action=\"nav\" data-view=\"equipment\"" + (view.name === "equipment" || view.name === "equipment-form" ? " aria-current=\"page\"" : "") + ">Equipment</button>" +
       "</nav>" +
-      "<form id=\"name-form\" class=\"row\">" +
+      "<form id=\"name-form\" class=\"name-form\">" +
       "<label>Your name<input id=\"display-name\" value=\"" + esc(nameOf(user.id)) + "\"></label>" +
       "<button type=\"submit\" class=\"secondary\"" + disabled() + ">Save name</button></form>" +
       "</header>" + banner() + (search.trim() && listing ? searchResults(current) : body);
@@ -182,8 +182,8 @@
 
   function orderList() {
     var orders = visibleOrders();
-    var cards = orders.map(orderCard).join("") || "<p class=\"muted\">No open work orders.</p>";
-    return "<div class=\"row\"><h2>Work orders</h2><button type=\"button\" data-action=\"new-order\"" + disabled() + ">New order</button></div>" +
+    var cards = orders.map(orderCard).join("") || "<p class=\"empty\">No open work orders.</p>";
+    return "<div class=\"page-head\"><h2>Work orders</h2><button type=\"button\" data-action=\"new-order\"" + disabled() + ">New order</button></div>" +
       filtersHtml() + cards;
   }
 
@@ -224,9 +224,9 @@
 
   function searchResults() {
     return "<h2>Search</h2><h3>Orders</h3>" +
-      (visibleOrders().map(orderCard).join("") || "<p class=\"muted\">No matching orders.</p>") +
+      (visibleOrders().map(orderCard).join("") || "<p class=\"empty\">No matching orders.</p>") +
       "<h3>Equipment</h3>" +
-      (visibleEquipment().map(equipmentCard).join("") || "<p class=\"muted\">No matching equipment.</p>");
+      (visibleEquipment().map(equipmentCard).join("") || "<p class=\"empty\">No matching equipment.</p>");
   }
 
   function orderForm() {
@@ -345,8 +345,8 @@
   }
 
   function equipmentList() {
-    var cards = visibleEquipment().map(equipmentCard).join("") || "<p class=\"muted\">No equipment yet.</p>";
-    return "<div class=\"row\"><h2>Equipment</h2><button type=\"button\" data-action=\"new-equipment\"" + disabled() + ">New equipment</button></div>" + cards;
+    var cards = visibleEquipment().map(equipmentCard).join("") || "<p class=\"empty\">No equipment yet.</p>";
+    return "<div class=\"page-head\"><h2>Equipment</h2><button type=\"button\" data-action=\"new-equipment\"" + disabled() + ">New equipment</button></div>" + cards;
   }
 
   function equipmentCard(item) {

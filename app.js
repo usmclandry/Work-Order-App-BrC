@@ -249,12 +249,12 @@
   function accessControls() {
     if (!userCanManageAccess()) return "";
     var rows = data().settings.people.map(function (person) {
-      var on = person.canCreate !== false;
+      var on = JobModel.personCanCreate(data().settings, person);
       return "<button type=\"button\" class=\"switch\" data-action=\"set-create\" data-id=\"" + esc(person.id) + "\" aria-pressed=\"" + (on ? "true" : "false") + "\"" + disabled() + ">" +
         "<span>Can Create · " + esc(person.displayName) + "</span><span class=\"knob\"></span></button>";
     }).join("");
     return "<div class=\"access\"><h3>Who Can Create</h3>" +
-      "<p class=\"muted\">These accounts can create work orders and budgets. Only you can turn this on or off.</p>" +
+      "<p class=\"muted\">These accounts can create work orders and budgets. Full accounts can turn this on or off.</p>" +
       rows + "</div>";
   }
 

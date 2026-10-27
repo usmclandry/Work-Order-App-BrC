@@ -299,14 +299,43 @@
   var MAX_PEOPLE = 10;
   var ACCESS_MANAGER_ID = "user:4bfda55b-dbec-4854-8731-ff75b7d913fd";
 
+  function fullAccount(settings, person) {
+    if (!person) return false;
+    var index = -1;
+    (settings.people || []).forEach(function (item, i) {
+      if (item.id === person.id) index = i;
+    });
+    return index >= 0 && index < 2;
+  }
+
+  function normalizeFullAccounts(settings) {
+    var changed = false;
+    (settings.people || []).forEach(function (person, index) {
+      if (index >= 2) return;
+      if (person.canCreate !== true) {
+        person.canCreate = true;
+        changed = true;
+      }
+      if (person.canManageAccess !== true) {
+        person.canManageAccess = true;
+        changed = true;
+      }
+    });
+    return changed;
+  }
+
   function personCanCreate(settings, actor) {
     var person = findPerson(settings, actor && actor.id);
     if (!person) return false;
+    if (fullAccount(settings, person)) return true;
     return person.canCreate !== false;
   }
 
   function canManageAccess(settings, actor) {
-    return !!(actor && actor.id === ACCESS_MANAGER_ID && findPerson(settings, actor.id));
+    var person = findPerson(settings, actor && actor.id);
+    if (!person) return false;
+    if (person.id === ACCESS_MANAGER_ID) return true;
+    return fullAccount(settings, person) || person.canManageAccess === true;
   }
 
   function assertCanCreate(settings, actor) {
@@ -314,7 +343,7 @@
   }
 
   function assertCanManageAccess(settings, actor) {
-    if (!canManageAccess(settings, actor)) throw new Error("Only Brandon can change who can create.");
+    if (!canManageAccess(settings, actor)) throw new Error("Only a full account can change who can create.");
   }
 
   function assertCanNote(actor, order) {
@@ -515,6 +544,8 @@
       if (files.indexOf(file) === -1) files.push(file);
     }
 
+    if (normalizeFullAccounts(settings)) touch("data/settings.json");
+
     if (op.type === "addPerson" || op.type === "updateDisplayName") {
       var displayName = String(op.displayName || actor.displayName || actorTag(actor)).trim() || actorTag(actor);
       var existing = findPerson(settings, actor.id);
@@ -531,8 +562,10 @@
           githubLogin: actor.githubLogin || "",
           email: actor.email || "",
           displayName: displayName,
-          canCreate: settings.people.length === 0
+          canCreate: settings.people.length < 2,
+          canManageAccess: settings.people.length < 2
         });
+        normalizeFullAccounts(settings);
         message = commitMessage(actor, "Add person");
       }
       touch("data/settings.json");
@@ -541,6 +574,9 @@
       var accessPerson = findPerson(settings, op.personId);
       if (!accessPerson) throw new Error("Choose a person.");
       var allow = !!op.canCreate;
+      if (!allow && fullAccount(settings, accessPerson)) {
+        throw new Error(accessPerson.displayName + " stays a full account.");
+      }
       if (!allow) {
         var still = settings.people.some(function (person) {
           return person.id !== accessPerson.id && person.canCreate !== false;

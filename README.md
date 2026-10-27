@@ -23,4 +23,4 @@ The anon key is meant to be in this page. Database rules still require a signed-
 
 `styles.css` is loaded with `?v=13`, `config.js` with `?v=2`, `model.js` with `?v=2`, `supabase.js` with `?v=1`, and `app.js` with `?v=13`. Raise those numbers when you publish a change so phones pick up the new page. Dark mode is stored on the phone as `jsw.theme`.
 
-The first account to sign in can create work orders and budgets. Later accounts cannot until that is turned on in Settings. An eleventh sign-in is refused. Sign out clears the session from this phone.
+The first two accounts have full access. Later accounts cannot create work orders or budgets until a full account turns that on in Settings. An eleventh sign-in is refused. Sign out clears the session from this phone.

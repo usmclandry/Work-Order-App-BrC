@@ -60,7 +60,9 @@ test("ten people can join and an eleventh cannot", function () {
   }
   assert.equal(current.settings.people.length, 10);
   assert.equal(current.settings.people[0].canCreate, true);
-  assert.equal(current.settings.people[9].canCreate, false);
+  assert.equal(current.settings.people[1].canCreate, true);
+  assert.equal(current.settings.people[1].canManageAccess, true);
+  assert.equal(current.settings.people[2].canCreate, false);
   current.actor = actor("person11", "Person 11");
   assert.throws(function () {
     apply(current, { type: "addPerson", displayName: "Person 11" });
@@ -442,8 +444,10 @@ test("followers stay on the conversation and off the owner's list of edits", fun
 test("only chosen accounts can create work orders and budgets", function () {
   let current = seed();
   assert.equal(current.settings.people[0].canCreate, true);
-  assert.equal(current.settings.people[1].canCreate, false);
-  current.actor = actor("jordan", "Jordan");
+  assert.equal(current.settings.people[1].canCreate, true);
+  current = withPerson(current, actor("sam", "Sam"));
+  assert.equal(current.settings.people[2].canCreate, false);
+  current.actor = actor("sam", "Sam");
   assert.throws(function () {
     apply(current, {
       type: "createOrder",
@@ -462,32 +466,15 @@ test("only chosen accounts can create work orders and budgets", function () {
       codes: [{ code: "100", limit: "10" }]
     });
   }, /can't create/);
-  current.actor = actor("alex", "Alex");
   assert.throws(function () {
-    apply(current, { type: "setCreateAccess", personId: "github:jordan", canCreate: true });
-  }, /Only Brandon/);
-  current.settings.people.push({
-    id: Model.accessManagerId,
-    githubLogin: "",
-    email: "",
-    displayName: "Brandon Landry",
-    canCreate: true
-  });
-  current.actor = {
-    id: Model.accessManagerId,
-    githubLogin: "",
-    email: "brandon@example.com",
-    displayName: "Brandon Landry"
-  };
-  current = apply(current, { type: "setCreateAccess", personId: "github:alex", canCreate: false });
-  assert.throws(function () {
-    apply(current, { type: "setCreateAccess", personId: Model.accessManagerId, canCreate: false });
-  }, /Someone has to be able to create/);
-  current = apply(current, { type: "setCreateAccess", personId: "github:jordan", canCreate: true });
+    apply(current, { type: "setCreateAccess", personId: "github:sam", canCreate: true });
+  }, /full account/);
   current.actor = actor("jordan", "Jordan");
   assert.throws(function () {
-    apply(current, { type: "setCreateAccess", personId: "github:jordan", canCreate: false });
-  }, /Only Brandon/);
+    apply(current, { type: "setCreateAccess", personId: "github:alex", canCreate: false });
+  }, /stays a full account/);
+  current = apply(current, { type: "setCreateAccess", personId: "github:sam", canCreate: true });
+  current.actor = actor("sam", "Sam");
   current = apply(current, {
     type: "createOrder",
     title: "Extra",
@@ -495,6 +482,9 @@ test("only chosen accounts can create work orders and budgets", function () {
     description: "Allowed now."
   });
   assert.equal(current.work.orders[1].id, "WO-002");
+  assert.throws(function () {
+    apply(current, { type: "setCreateAccess", personId: "github:sam", canCreate: false });
+  }, /full account/);
 });
 
 test("safe filenames drop path pieces", function () {

@@ -14,7 +14,7 @@
   }
 
   function emptySettings() {
-    return { version: 1, people: [] };
+    return { version: 1, people: [], budgets: [] };
   }
 
   function emptyEquipment() {
@@ -222,6 +222,7 @@
       followers: (source.followers || []).filter(function (id) {
         return id && id !== (source.assignee || actor.id);
       }),
+      purchases: [],
       repeat: source.repeat,
       fromId: source.id,
       nextId: "",
@@ -291,9 +292,28 @@
     if (!canCompleteStep(actor, order, step)) throw new Error("You can only check off steps assigned to you.");
   }
 
-  function canAddNote(actor, order) {
-    if (canEditOrder(actor, order)) return true;
-    return !!(actor && followerIds(order).indexOf(actor.id) !== -1);
+  function canAddNote(actor) {
+    return !!(actor && actor.id);
+  }
+
+  var ACCESS_MANAGER_ID = "user:4bfda55b-dbec-4854-8731-ff75b7d913fd";
+
+  function personCanCreate(settings, actor) {
+    var person = findPerson(settings, actor && actor.id);
+    if (!person) return false;
+    return person.canCreate !== false;
+  }
+
+  function canManageAccess(settings, actor) {
+    return !!(actor && actor.id === ACCESS_MANAGER_ID && findPerson(settings, actor.id));
+  }
+
+  function assertCanCreate(settings, actor) {
+    if (!personCanCreate(settings, actor)) throw new Error("You can't create new work orders or budgets.");
+  }
+
+  function assertCanManageAccess(settings, actor) {
+    if (!canManageAccess(settings, actor)) throw new Error("Only Brandon can change who can create.");
   }
 
   function assertCanNote(actor, order) {
@@ -306,6 +326,176 @@
 
   function commitMessage(actor, text) {
     return text + " by " + actorTag(actor);
+  }
+
+  function budgetsOf(settings) {
+    return Array.isArray(settings.budgets) ? settings.budgets : [];
+  }
+
+  function findBudget(settings, id) {
+    if (!id) return null;
+    return budgetsOf(settings).find(function (item) { return item.id === id; }) || null;
+  }
+
+  function parseMoney(value) {
+    if (value == null) return null;
+    var text = String(value).trim().replace(/[$,\s]/g, "");
+    if (!text) return null;
+    if (!/^\d+(\.\d{0,2})?$/.test(text)) throw new Error("Enter the cost in dollars and cents.");
+    var parts = text.split(".");
+    var dollars = parseInt(parts[0], 10);
+    var cents = parseInt(((parts[1] || "") + "00").slice(0, 2), 10);
+    var total = dollars * 100 + cents;
+    if (total > 999999999) throw new Error("That amount is too large.");
+    return total;
+  }
+
+  function formatMoney(cents) {
+    if (cents == null) return "";
+    var sign = cents < 0 ? "-" : "";
+    var abs = Math.abs(Math.trunc(cents));
+    var dollars = String(Math.floor(abs / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return sign + "$" + dollars + "." + String(abs % 100).padStart(2, "0");
+  }
+
+  function dateStamp(value, message) {
+    var text = String(value || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new Error(message);
+    return text;
+  }
+
+  function codesOf(budget) {
+    if (!budget) return [];
+    if (Array.isArray(budget.codes) && budget.codes.length) return budget.codes;
+    if (budget.code) return [{ id: budget.id, code: budget.code, limitCents: budget.limitCents || 0 }];
+    return Array.isArray(budget.codes) ? budget.codes : [];
+  }
+
+  function findCode(settings, id) {
+    if (!id) return null;
+    var found = null;
+    budgetsOf(settings).some(function (budget) {
+      var code = codesOf(budget).find(function (item) { return item.id === id; });
+      if (!code) return false;
+      found = { budget: budget, code: code };
+      return true;
+    });
+    return found;
+  }
+
+  function buildBudget(op, settings, existing) {
+    var name = String(op.name || "").trim().replace(/\s+/g, " ");
+    if (!name) throw new Error("Enter a name for the budget.");
+    if (name.length > 80) throw new Error("That budget name is too long.");
+    var totalCents = parseMoney(op.total);
+    var starts = dateStamp(op.starts, "Enter the first day of the budget year.");
+    var ends = dateStamp(op.ends, "Enter the last day of the budget year.");
+    if (ends < starts) throw new Error("The budget year has to end after it starts.");
+    var kept = [];
+    budgetsOf(settings).forEach(function (budget) {
+      if (existing && budget.id === existing.id) return;
+      codesOf(budget).forEach(function (code) { kept.push(code.id); });
+    });
+    var seen = {};
+    var codes = [];
+    (Array.isArray(op.codes) ? op.codes : []).forEach(function (row) {
+      var code = String(row && row.code || "").trim().replace(/\s+/g, " ");
+      var limitCents = parseMoney(row && row.limit);
+      if (!code && limitCents == null) return;
+      if (!code) throw new Error("Enter a billing code.");
+      if (code.length > 40) throw new Error("That billing code is too long.");
+      if (limitCents == null) throw new Error("Enter a limit for " + code + ".");
+      var key = code.toLowerCase();
+      if (seen[key]) throw new Error(code + " is already in this budget.");
+      seen[key] = true;
+      var taken = false;
+      budgetsOf(settings).forEach(function (budget) {
+        if (existing && budget.id === existing.id) return;
+        codesOf(budget).forEach(function (item) {
+          if (item.code.toLowerCase() === key) taken = true;
+        });
+      });
+      if (taken) throw new Error(code + " is already in a budget.");
+      var keepId = row.id && existing && codesOf(existing).some(function (item) { return item.id === row.id; });
+      var id = keepId ? row.id : nextNumberedId("BC", kept.concat(codes.map(function (item) { return item.id; })));
+      codes.push({ id: id, code: code, limitCents: limitCents });
+    });
+    if (!codes.length) throw new Error("Add a billing code.");
+    return { name: name, totalCents: totalCents, starts: starts, ends: ends, codes: codes };
+  }
+
+  function orderPurchases(order) {
+    var list = Array.isArray(order.purchases) ? order.purchases.slice() : [];
+    if (order.costCents != null && order.budgetId) {
+      var covered = list.some(function (item) {
+        return item.codeId === order.budgetId && item.costCents === order.costCents;
+      });
+      if (!covered) {
+        list.push({ id: "legacy", codeId: order.budgetId, costCents: order.costCents, at: order.createdAt || "", by: "" });
+      }
+    }
+    return list;
+  }
+
+  function orderUsesCode(order, codeId) {
+    return orderPurchases(order).some(function (purchase) { return purchase.codeId === codeId; });
+  }
+
+  function spentCents(work, codeId) {
+    var total = 0;
+    (work.orders || []).forEach(function (order) {
+      if (order.status === "canceled") return;
+      orderPurchases(order).forEach(function (purchase) {
+        if (purchase.codeId === codeId && purchase.costCents != null) total += purchase.costCents;
+      });
+    });
+    return total;
+  }
+
+  function budgetSpentCents(work, budget) {
+    var total = 0;
+    codesOf(budget).forEach(function (code) { total += spentCents(work, code.id); });
+    return total;
+  }
+
+  function budgetNotices(settings, work, todayStamp) {
+    var notices = [];
+    budgetsOf(settings).forEach(function (budget) {
+      var codes = codesOf(budget);
+      var assigned = (work.orders || []).some(function (order) {
+        return order.status !== "canceled" && codes.some(function (code) { return orderUsesCode(order, code.id); });
+      });
+      codes.forEach(function (code) {
+        var spent = spentCents(work, code.id);
+        if (spent > code.limitCents) {
+          notices.push({
+            kind: "limit",
+            budgetId: budget.id,
+            codeId: code.id,
+            code: code.code,
+            spent: spent,
+            limit: code.limitCents,
+            over: spent - code.limitCents
+          });
+        }
+      });
+      if (budget.totalCents != null) {
+        var allSpent = budgetSpentCents(work, budget);
+        if (allSpent > budget.totalCents) {
+          notices.push({
+            kind: "total",
+            budgetId: budget.id,
+            spent: allSpent,
+            limit: budget.totalCents,
+            over: allSpent - budget.totalCents
+          });
+        }
+      }
+      if (assigned && budget.ends < todayStamp) {
+        notices.push({ kind: "year", budgetId: budget.id, ends: budget.ends });
+      }
+    });
+    return notices;
   }
 
   function apply(state, op) {
@@ -339,11 +529,26 @@
           id: actor.id,
           githubLogin: actor.githubLogin || "",
           email: actor.email || "",
-          displayName: displayName
+          displayName: displayName,
+          canCreate: settings.people.length === 0
         });
         message = commitMessage(actor, "Add person");
       }
       touch("data/settings.json");
+    } else if (op.type === "setCreateAccess") {
+      assertCanManageAccess(settings, actor);
+      var accessPerson = findPerson(settings, op.personId);
+      if (!accessPerson) throw new Error("Choose a person.");
+      var allow = !!op.canCreate;
+      if (!allow) {
+        var still = settings.people.some(function (person) {
+          return person.id !== accessPerson.id && person.canCreate !== false;
+        });
+        if (!still) throw new Error("Someone has to be able to create.");
+      }
+      accessPerson.canCreate = allow;
+      touch("data/settings.json");
+      message = commitMessage(actor, (allow ? "Allow " : "Limit ") + accessPerson.displayName);
     } else if (op.type === "createEquipment") {
       var equipmentId = String(op.id || "").trim();
       if (!equipmentId) throw new Error("Enter an equipment ID.");
@@ -417,6 +622,7 @@
       touch("data/equipment.json");
       message = commitMessage(actor, "Reactivate " + waking.id);
     } else if (op.type === "createOrder") {
+      assertCanCreate(settings, actor);
       var created = buildOrderFields(op, settings, equipment, null);
       var orderId = nextNumberedId("WO", work.orders.map(function (order) { return order.id; }));
       var createdAt = nowIso();
@@ -435,6 +641,7 @@
         notes: [],
         steps: [],
         followers: [],
+        purchases: [],
         repeat: created.repeat,
         fromId: "",
         nextId: "",
@@ -467,7 +674,7 @@
     } else if (op.type === "addNote") {
       var noted = findOrder(work, op.orderId);
       if (!noted) throw new Error("Work order was not found.");
-      assertCanNote(actor, noted);
+      assertCanNote(actor);
       var noteText = String(op.text || "").trim();
       if (!noteText) throw new Error("Enter a note.");
       noted.notes.push({ at: nowIso(), by: actor.id, text: noteText });
@@ -567,7 +774,6 @@
     } else if (op.type === "setStatus") {
       var statusOrder = findOrder(work, op.orderId);
       if (!statusOrder) throw new Error("Work order was not found.");
-      assertCanEdit(actor, statusOrder);
       if (STATUSES.indexOf(op.status) === -1) throw new Error("Choose a status.");
       var reason = String(op.text || "").trim();
       if (NEEDS_TEXT.indexOf(op.status) !== -1 && !reason) throw new Error("Enter a reason.");
@@ -584,7 +790,6 @@
     } else if (op.type === "addAttachment") {
       var host = findOrder(work, op.orderId);
       if (!host) throw new Error("Work order was not found.");
-      assertCanEdit(actor, host);
       var filename = String(op.filename || "").trim();
       if (!filename) throw new Error("Choose a file.");
       var attachmentId = nextNumberedId("ATT", work.attachments.map(function (item) { return item.id; }));
@@ -616,6 +821,102 @@
       if (owner) owner.log.push(logLine(actor, "unlinked", { text: attachment.filename, to: attachment.id }));
       touch("data/work.json");
       message = commitMessage(actor, "Unlink " + attachment.id);
+    } else if (op.type === "createBudget") {
+      assertCanCreate(settings, actor);
+      if (!Array.isArray(settings.budgets)) settings.budgets = [];
+      var built = buildBudget(op, settings, null);
+      var budgetId = nextNumberedId("BD", settings.budgets.map(function (item) { return item.id; }));
+      settings.budgets.push({
+        id: budgetId,
+        name: built.name,
+        totalCents: built.totalCents,
+        starts: built.starts,
+        ends: built.ends,
+        codes: built.codes
+      });
+      touch("data/settings.json");
+      message = commitMessage(actor, "Add budget " + built.name);
+    } else if (op.type === "updateBudget") {
+      assertCanCreate(settings, actor);
+      if (!Array.isArray(settings.budgets)) settings.budgets = [];
+      var currentBudget = findBudget(settings, op.id);
+      if (!currentBudget) throw new Error("That budget was not found.");
+      var revised = buildBudget(op, settings, currentBudget);
+      codesOf(currentBudget).forEach(function (code) {
+        var still = revised.codes.some(function (item) { return item.id === code.id; });
+        if (still) return;
+        var usedCode = (work.orders || []).some(function (order) { return orderUsesCode(order, code.id); });
+        if (usedCode) throw new Error("A work order still uses " + code.code + ".");
+      });
+      currentBudget.name = revised.name;
+      currentBudget.totalCents = revised.totalCents;
+      currentBudget.starts = revised.starts;
+      currentBudget.ends = revised.ends;
+      currentBudget.codes = revised.codes;
+      touch("data/settings.json");
+      message = commitMessage(actor, "Update budget " + revised.name);
+    } else if (op.type === "removeBudget") {
+      assertCanCreate(settings, actor);
+      var removing = findBudget(settings, op.id);
+      if (!removing) throw new Error("That budget was not found.");
+      var used = (work.orders || []).some(function (order) {
+        return codesOf(removing).some(function (code) { return orderUsesCode(order, code.id); });
+      });
+      if (used) throw new Error("A work order still uses a billing code in this budget.");
+      settings.budgets = budgetsOf(settings).filter(function (item) { return item.id !== removing.id; });
+      touch("data/settings.json");
+      message = commitMessage(actor, "Remove budget " + removing.name);
+    } else if (op.type === "addPurchase") {
+      var purchaseOrder = findOrder(work, op.orderId);
+      if (!purchaseOrder) throw new Error("Work order was not found.");
+      var codeId = String(op.budgetId || "").trim();
+      var chosen = findCode(settings, codeId);
+      if (!chosen) throw new Error("Choose a billing code.");
+      var purchaseCents = parseMoney(op.cost);
+      if (purchaseCents == null || purchaseCents <= 0) throw new Error("Enter a cost.");
+      if (!Array.isArray(purchaseOrder.purchases)) purchaseOrder.purchases = [];
+      if (purchaseOrder.costCents != null && purchaseOrder.budgetId) {
+        purchaseOrder.purchases.push({
+          id: nextNumberedId("P", purchaseOrder.purchases.map(function (item) { return item.id; })),
+          codeId: purchaseOrder.budgetId,
+          costCents: purchaseOrder.costCents,
+          at: purchaseOrder.createdAt || nowIso(),
+          by: ""
+        });
+        purchaseOrder.costCents = null;
+        purchaseOrder.budgetId = "";
+      }
+      var purchaseId = nextNumberedId("P", purchaseOrder.purchases.map(function (item) { return item.id; }));
+      purchaseOrder.purchases.push({
+        id: purchaseId,
+        codeId: codeId,
+        costCents: purchaseCents,
+        at: nowIso(),
+        by: actor.id
+      });
+      purchaseOrder.log.push(logLine(actor, "purchase", { text: chosen.code.code, to: formatMoney(purchaseCents) }));
+      touch("data/work.json");
+      message = commitMessage(actor, "Add purchase on " + purchaseOrder.id);
+    } else if (op.type === "removePurchase") {
+      var purchaseHost = findOrder(work, op.orderId);
+      if (!purchaseHost) throw new Error("Work order was not found.");
+      if (!Array.isArray(purchaseHost.purchases)) purchaseHost.purchases = [];
+      if (op.purchaseId === "legacy" && purchaseHost.costCents != null) {
+        purchaseHost.log.push(logLine(actor, "purchase-removed", { text: purchaseHost.budgetId, to: formatMoney(purchaseHost.costCents) }));
+        purchaseHost.costCents = null;
+        purchaseHost.budgetId = "";
+      } else {
+        var dropping = purchaseHost.purchases.find(function (item) { return item.id === op.purchaseId; });
+        if (!dropping) throw new Error("That purchase was not found.");
+        purchaseHost.purchases = purchaseHost.purchases.filter(function (item) { return item.id !== dropping.id; });
+        var droppedCode = findCode(settings, dropping.codeId);
+        purchaseHost.log.push(logLine(actor, "purchase-removed", {
+          text: droppedCode ? droppedCode.code.code : dropping.codeId,
+          to: formatMoney(dropping.costCents)
+        }));
+      }
+      touch("data/work.json");
+      message = commitMessage(actor, "Remove purchase on " + purchaseHost.id);
     } else {
       throw new Error("Unknown save.");
     }
@@ -731,6 +1032,10 @@
     }).join(" ");
     var person = findPerson(settings, order.assignee);
     var notes = (order.notes || []).map(function (note) { return note.text; }).join(" ");
+    var purchaseText = orderPurchases(order).map(function (purchase) {
+      var found = findCode(settings, purchase.codeId);
+      return (found ? found.code.code + " " + found.budget.name : purchase.codeId) + " " + formatMoney(purchase.costCents);
+    }).join(" ");
     return [
       order.id,
       order.fromId || "",
@@ -746,6 +1051,8 @@
       (order.tags || []).join(" "),
       equipmentText,
       person ? person.displayName + " " + (person.githubLogin || "") + " " + (person.email || "") : "",
+      purchaseText,
+      order.costCents == null ? "" : formatMoney(order.costCents),
       (order.followers || []).map(function (id) {
         var follower = findPerson(settings, id);
         return follower ? follower.displayName : id;
@@ -763,6 +1070,10 @@
       equipment: equipmentDoc.equipment.filter(function (item) {
         return [item.id, item.name, item.notes, (item.tags || []).join(" "), item.status, item.retiredNote]
           .join(" ").toLowerCase().indexOf(needle) !== -1;
+      }),
+      budgets: budgetsOf(settings).filter(function (budget) {
+        var text = [budget.name].concat(codesOf(budget).map(function (code) { return code.code; }));
+        return text.join(" ").toLowerCase().indexOf(needle) !== -1;
       })
     };
   }
@@ -813,8 +1124,19 @@
     ownerId: ownerId,
     canEditOrder: canEditOrder,
     canAddNote: canAddNote,
+    personCanCreate: personCanCreate,
+    canManageAccess: canManageAccess,
+    accessManagerId: ACCESS_MANAGER_ID,
     canCompleteStep: canCompleteStep,
     findPerson: findPerson,
-    findAttachment: findAttachment
+    findAttachment: findAttachment,
+    findBudget: findBudget,
+    findCode: findCode,
+    parseMoney: parseMoney,
+    formatMoney: formatMoney,
+    spentCents: spentCents,
+    budgetSpentCents: budgetSpentCents,
+    orderPurchases: orderPurchases,
+    budgetNotices: budgetNotices
   };
 });

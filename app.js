@@ -27,6 +27,7 @@
   var calendarCursor = null;
   var calendarDay = "";
   var openGroups = { today: true, week: false, upcoming: false, recent: false };
+  var budgetDraft = null;
   var previewState = null;
   var chain = Promise.resolve();
 
@@ -205,12 +206,12 @@
 
   function shell(body) {
     var current = data();
-      var listing = view.name === "orders" || view.name === "open-orders" || view.name === "equipment";
+      var listing = view.name === "orders" || view.name === "open-orders" || view.name === "equipment" || view.name === "budget";
       return "<header class=\"app-header\">" +
       "<div class=\"topbar\"><div><h1>Broussard Campus</h1><p class=\"who\">" + esc(nameOf(user.id)) + "</p></div>" +
       "<div class=\"header-actions\">" + homeButton() + settingsButton() + "</div></div>" +
       (listing ? "<label class=\"search\"><span class=\"sr-only\">Search</span><input id=\"search\" value=\"" + esc(search) + "\" placeholder=\"Search Orders, Equipment, Notes\"></label>" : "") +
-      "</header>" + banner() + (search.trim() && listing ? searchResults(current) : body) + dock() + settingsSheet();
+      "</header>" + banner() + budgetAlerts() + (search.trim() && listing ? searchResults(current) : body) + dock() + settingsSheet();
   }
 
   function homeButton() {
@@ -231,25 +232,73 @@
       "<form id=\"name-form\" class=\"name-form\">" +
       "<label>Your Name<input id=\"display-name\" value=\"" + esc(nameOf(user.id)) + "\"></label>" +
       "<button type=\"submit\"" + disabled() + ">Save Name</button></form>" +
+      accessControls() +
       "<button type=\"button\" class=\"text sign-out\" data-action=\"sign-out\">Sign Out</button>" +
       "</div></div>";
+  }
+
+  function userCanCreate() {
+    if (!user) return false;
+    return JobModel.personCanCreate(data().settings, user);
+  }
+
+  function userCanManageAccess() {
+    if (!user) return false;
+    return JobModel.canManageAccess(data().settings, user);
+  }
+
+  function accessControls() {
+    if (!userCanManageAccess()) return "";
+    var rows = data().settings.people.map(function (person) {
+      var on = person.canCreate !== false;
+      return "<button type=\"button\" class=\"switch\" data-action=\"set-create\" data-id=\"" + esc(person.id) + "\" aria-pressed=\"" + (on ? "true" : "false") + "\"" + disabled() + ">" +
+        "<span>Can Create · " + esc(person.displayName) + "</span><span class=\"knob\"></span></button>";
+    }).join("");
+    return "<div class=\"access\"><h3>Who Can Create</h3>" +
+      "<p class=\"muted\">These accounts can create work orders and budgets. Only you can turn this on or off.</p>" +
+      rows + "</div>";
   }
 
   function dock() {
     var equipmentView = view.name.indexOf("equipment") === 0;
     var primary = "";
-    if (view.name === "orders" || view.name === "open-orders") primary = "<button type=\"button\" class=\"add\" data-action=\"new-order\"" + disabled() + ">New Order</button>";
+    var creator = userCanCreate();
+    if (creator && (view.name === "orders" || view.name === "open-orders")) primary = "<button type=\"button\" class=\"add\" data-action=\"new-order\"" + disabled() + ">New Order</button>";
     if (view.name === "equipment") primary = "<button type=\"button\" class=\"add\" data-action=\"new-equipment\"" + disabled() + ">New Equipment</button>";
+    if (creator && view.name === "budget") primary = "<button type=\"button\" class=\"add\" data-action=\"new-budget\"" + disabled() + ">New Budget</button>";
+    var budgetView = view.name === "budget" || view.name === "budget-form";
     return "<div class=\"dock\">" + primary +
       "<nav class=\"tabs\">" +
       "<button type=\"button\" data-action=\"nav\" data-view=\"open-orders\"" + (view.name === "open-orders" ? " aria-current=\"page\"" : "") + ">Orders</button>" +
       "<button type=\"button\" data-action=\"nav\" data-view=\"equipment\"" + (equipmentView ? " aria-current=\"page\"" : "") + ">Equipment</button>" +
+      "<button type=\"button\" data-action=\"nav\" data-view=\"budget\"" + (budgetView ? " aria-current=\"page\"" : "") + ">Budget</button>" +
       "</nav></div>";
   }
 
   function banner() {
     return (errorText ? "<div class=\"banner error\">" + esc(errorText) + "</div>" : "") +
       (notice ? "<div class=\"banner ok\">" + esc(notice) + "</div>" : "");
+  }
+
+  function budgetAlerts() {
+    if (!user || view.name === "budget" || view.name === "budget-form") return "";
+    return budgetNoticeHtml(JobModel.budgetNotices(data().settings, data().work, today()));
+  }
+
+  function budgetNoticeHtml(notices) {
+    if (!notices.length) return "";
+    var onBudget = view.name === "budget" || view.name === "budget-form";
+    return "<div class=\"budget-alerts\">" + notices.map(function (notice) {
+      var budget = JobModel.findBudget(data().settings, notice.budgetId);
+      var name = budget ? budget.name : "A budget";
+      var text = notice.kind === "limit"
+        ? notice.code + " is " + JobModel.formatMoney(notice.over) + " over its " + JobModel.formatMoney(notice.limit) + " limit."
+        : notice.kind === "total"
+          ? name + " is " + JobModel.formatMoney(notice.over) + " over its " + JobModel.formatMoney(notice.limit) + " total."
+          : name + " budget year ended " + prettyDate(notice.ends) + ".";
+      if (onBudget) return "<div class=\"banner error\">" + esc(text) + "</div>";
+      return "<button type=\"button\" class=\"banner error\" data-action=\"nav\" data-view=\"budget\">" + esc(text) + "</button>";
+    }).join("") + "</div>";
   }
 
   function disabled() { return busy ? " disabled" : ""; }
@@ -260,6 +309,8 @@
     if (view.name === "equipment-form") return equipmentForm();
     if (view.name === "equipment-detail") return equipmentDetail();
     if (view.name === "equipment") return equipmentList();
+    if (view.name === "budget") return budgetPage();
+    if (view.name === "budget-form") return budgetForm();
     if (view.name === "open-orders") return openOrdersPage();
     return orderList();
   }
@@ -491,6 +542,18 @@
       var finished = steps.filter(function (step) { return step.done; }).length;
       facts.push(finished + " of " + steps.length);
     }
+    var purchases = JobModel.orderPurchases(order);
+    if (purchases.length) {
+      var purchaseTotal = purchases.reduce(function (sum, purchase) { return sum + (purchase.costCents || 0); }, 0);
+      facts.push(JobModel.formatMoney(purchaseTotal));
+    }
+    var factLabels = {};
+    orderBudgetNotices(order).forEach(function (item) {
+      var label = item.kind === "year" ? "Budget Year Ended" : "Over Budget";
+      if (factLabels[label]) return;
+      factLabels[label] = true;
+      facts.push(label);
+    });
     return "<button type=\"button\" class=\"card card-button tone-" + esc(tone) + "\" data-action=\"open-order\" data-id=\"" + esc(order.id) + "\">" +
       "<span class=\"job-top\"><strong>" + esc(order.title) + "</strong>" +
       "<span class=\"chip " + esc(tone) + "\">" + esc(overdue ? "Overdue" : STATUS_LABEL[order.status]) + "</span></span>" +
@@ -499,10 +562,15 @@
   }
 
   function searchResults() {
+    var budgets = JobModel.searchAll(search, data().settings, data().equipment, data().work).budgets || [];
+    var budgetHtml = budgets.length || view.name === "budget"
+      ? "<h3>Budgets</h3>" + (budgets.map(budgetCard).join("") || "<p class=\"empty\">No matching budgets.</p>")
+      : "";
     return "<h2>Search</h2><h3>Orders</h3>" +
       (visibleOrders().map(orderCard).join("") || "<p class=\"empty\">No matching orders.</p>") +
       "<h3>Equipment</h3>" +
-      (visibleEquipment().map(equipmentCard).join("") || "<p class=\"empty\">No matching equipment.</p>");
+      (visibleEquipment().map(equipmentCard).join("") || "<p class=\"empty\">No matching equipment.</p>") +
+      budgetHtml;
   }
 
   function orderForm() {
@@ -609,28 +677,29 @@
       specHtml("Followers", followerLine(order, owns)) +
       "</dl>" +
       "<p class=\"lead\">" + esc(order.description) + "</p>" +
+      budgetNoticeHtml(orderBudgetNotices(order)) +
       repeatLinks(order) +
       (owns
         ? "<button type=\"button\" class=\"text\" data-action=\"edit-order\" data-id=\"" + esc(order.id) + "\">Edit Details</button>"
-        : "<p class=\"muted\">Only " + esc(nameOf(JobModel.ownerId(order))) + " can edit this order. " +
-          (JobModel.canAddNote(user, order) ? "You can add notes, and check off steps assigned to you." : "You can check off steps assigned to you.") + "</p>") +
+        : "<p class=\"muted\">Only " + esc(nameOf(JobModel.ownerId(order))) + " can edit the details. You can update the status, add notes, files, and purchases, and check off steps assigned to you.</p>") +
       "</article>" +
       stepsCard(order, owns) +
-      (owns ? "<form class=\"card\" id=\"status-form\"><h3>Status</h3>" +
+      purchasesCard(order, true) +
+      "<form class=\"card\" id=\"status-form\"><h3>Status</h3>" +
       "<label><span class=\"sr-only\">Status</span><select name=\"status\">" + JobModel.STATUSES.map(function (status) {
         return "<option value=\"" + status + "\"" + (order.status === status ? " selected" : "") + ">" + STATUS_LABEL[status] + "</option>";
       }).join("") + "</select></label>" +
       "<label>Reason<textarea name=\"text\" placeholder=\"Required for Waiting, Done, and Canceled\"></textarea></label>" +
-      "<button type=\"submit\"" + disabled() + ">Update Status</button></form>" : "<section class=\"card\"><h3>Status</h3><p>" + esc(STATUS_LABEL[order.status]) + "</p></section>") +
-      (JobModel.canAddNote(user, order) ? "<form class=\"card\" id=\"note-form\"><h3>Note</h3><label><span class=\"sr-only\">Note</span><textarea name=\"text\" required placeholder=\"Add a Note\"></textarea></label>" +
-      "<button type=\"submit\"" + disabled() + ">Add Note</button></form>" : "") +
+      "<button type=\"submit\"" + disabled() + ">Update Status</button></form>" +
+      "<form class=\"card\" id=\"note-form\"><h3>Note</h3><label><span class=\"sr-only\">Note</span><textarea name=\"text\" required placeholder=\"Add a Note\"></textarea></label>" +
+      "<button type=\"submit\"" + disabled() + ">Add Note</button></form>" +
       "<section class=\"card\"><h3>Files</h3>" +
       (files.map(function (file) {
         return "<div class=\"file-row\"><button type=\"button\" data-action=\"open-file\" data-id=\"" + esc(file.id) + "\">" + esc(file.filename) + "</button>" +
           "<span class=\"meta\">" + esc(nameOf(file.by)) + " · " + esc(when(file.createdAt)) + "</span>" +
           (owns ? "<button type=\"button\" class=\"text\" data-action=\"unlink\" data-id=\"" + esc(file.id) + "\"" + disabled() + ">Remove</button>" : "") + "</div>";
       }).join("") || "<p class=\"muted\">No files yet.</p>") +
-      (owns ? "<label>Add a Photo or Document<input id=\"file\" type=\"file\" accept=\"image/*,.heic,.heif,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv\"" + disabled() + "></label>" : "") +
+      "<label>Add a Photo or Document<input id=\"file\" type=\"file\" accept=\"image/*,.heic,.heif,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv\"" + disabled() + "></label>" +
       "</section>" +
       "<section class=\"card\"><h3>Activity</h3><ul class=\"activity\">" + activity(order) + "</ul></section>" +
       imageDialog() +
@@ -731,6 +800,7 @@
       (order.tags.length ? "<div class=\"print-fact wide\"><span>Tags</span><strong>" + esc(order.tags.join(", ")) + "</strong></div>" : "") +
       "</div>" +
       "<section class=\"print-block\"><h2>Description</h2><p>" + esc(order.description) + "</p></section>" +
+      printPurchases(order) +
       printSteps(order) +
       (notes ? "<section class=\"print-block\"><h2>Notes</h2>" + notes + "</section>" : "") +
       (filesHtml ? "<section class=\"print-block\"><h2>Files</h2><ul>" + filesHtml + "</ul></section>" : "") +
@@ -830,12 +900,209 @@
     if (line.type === "unfollowed") return who + " removed " + nameOf(line.from) + " as a follower";
     if (line.type === "step-assigned") return who + (line.to ? " assigned \"" + line.text + "\" to " + nameOf(line.to) : " cleared the assignee on \"" + line.text + "\"");
     if (line.type === "status") return who + " changed status from " + STATUS_LABEL[line.from] + " to " + STATUS_LABEL[line.to] + (line.text ? ": " + line.text : "");
+    if (line.type === "purchase") return who + " added " + line.to + " on " + line.text;
+    if (line.type === "purchase-removed") return who + " removed " + line.to + " on " + line.text;
     if (line.type === "attachment") return who + " added " + line.text;
     if (line.type === "unlinked") return who + " removed " + line.text;
     if (line.type === "retire") return who + " retired this" + (line.text ? ". " + line.text : "");
     if (line.type === "reactivate") return who + " reactivated this";
     if (line.type === "rename") return who + " renamed " + line.from + " to " + line.to;
     return who + " updated this";
+  }
+
+  function moneyInput(cents) {
+    if (cents == null) return "";
+    return (cents / 100).toFixed(2);
+  }
+
+  function budgetCodes(budget) {
+    if (!budget) return [];
+    if (Array.isArray(budget.codes) && budget.codes.length) return budget.codes;
+    if (budget.code) return [{ id: budget.id, code: budget.code, limitCents: budget.limitCents || 0 }];
+    return [];
+  }
+
+  function budgetOptions(selected) {
+    var choices = [];
+    (data().settings.budgets || []).forEach(function (budget) {
+      budgetCodes(budget).forEach(function (code) {
+        choices.push({ id: code.id, label: code.code + " · " + budget.name });
+      });
+    });
+    choices.sort(function (a, b) { return a.label.localeCompare(b.label, undefined, { numeric: true }); });
+    return "<option value=\"\">None</option>" + choices.map(function (choice) {
+      return "<option value=\"" + esc(choice.id) + "\"" + (choice.id === selected ? " selected" : "") + ">" + esc(choice.label) + "</option>";
+    }).join("");
+  }
+
+  function budgetLabel(id) {
+    var found = JobModel.findCode(data().settings, id);
+    return found ? found.code.code + " · " + found.budget.name : "Missing code";
+  }
+
+  function orderBudgetNotices(order) {
+    if (!order || order.status === "canceled") return [];
+    var purchases = JobModel.orderPurchases(order);
+    if (!purchases.length) return [];
+    var codeIds = {};
+    var budgetIds = {};
+    purchases.forEach(function (purchase) {
+      codeIds[purchase.codeId] = true;
+      var found = JobModel.findCode(data().settings, purchase.codeId);
+      if (found) budgetIds[found.budget.id] = true;
+    });
+    return JobModel.budgetNotices(data().settings, data().work, today()).filter(function (notice) {
+      if (notice.kind === "limit") return !!codeIds[notice.codeId];
+      return !!budgetIds[notice.budgetId];
+    });
+  }
+
+  function purchasesCard(order, owns) {
+    var purchases = JobModel.orderPurchases(order);
+    var total = purchases.reduce(function (sum, purchase) { return sum + (purchase.costCents || 0); }, 0);
+    var rows = purchases.map(function (purchase) {
+      return "<div class=\"file-row\"><span>" + esc(budgetLabel(purchase.codeId)) + "</span>" +
+        "<span class=\"meta\">" + esc(JobModel.formatMoney(purchase.costCents)) + (purchase.at ? " · " + esc(when(purchase.at)) : "") + "</span>" +
+        (owns ? "<button type=\"button\" class=\"text\" data-action=\"remove-purchase\" data-id=\"" + esc(purchase.id) + "\"" + disabled() + ">Remove</button>" : "") +
+        "</div>";
+    }).join("");
+    var choices = budgetOptions("");
+    var hasCodes = (data().settings.budgets || []).some(function (budget) {
+      return budgetCodes(budget).length;
+    });
+    var form = "";
+    if (owns && hasCodes) {
+      form = "<form id=\"purchase-form\" class=\"step-add\"><label>Billing Code<select name=\"budgetId\" required>" + choices.replace("<option value=\"\">None</option>", "<option value=\"\">Choose</option>") + "</select></label>" +
+        "<label>Cost<input name=\"cost\" inputmode=\"decimal\" autocomplete=\"off\" required placeholder=\"0.00\"></label>" +
+        "<button type=\"submit\"" + disabled() + ">Add</button></form>";
+    } else if (owns) {
+      form = "<p class=\"muted\">Add billing codes in Budget, then record purchases here.</p>";
+    }
+    return "<section class=\"card\"><h3>Purchases</h3>" +
+      (rows || "<p class=\"muted\">No purchases yet.</p>") +
+      (purchases.length ? "<p>Total " + esc(JobModel.formatMoney(total)) + "</p>" : "") +
+      form + "</section>";
+  }
+
+  function printPurchases(order) {
+    var purchases = JobModel.orderPurchases(order);
+    if (!purchases.length) return "";
+    var total = purchases.reduce(function (sum, purchase) { return sum + (purchase.costCents || 0); }, 0);
+    return "<section class=\"print-block\"><h2>Purchases</h2><ul>" +
+      purchases.map(function (purchase) {
+        return "<li>" + esc(budgetLabel(purchase.codeId)) + " · " + esc(JobModel.formatMoney(purchase.costCents)) + "</li>";
+      }).join("") +
+      "</ul><p>Total " + esc(JobModel.formatMoney(total)) + "</p></section>";
+  }
+
+  function tracker(label, spent, limitCents) {
+    var hasLimit = limitCents != null;
+    var over = hasLimit && spent > limitCents;
+    var width = 0;
+    if (hasLimit && limitCents > 0) width = Math.round(Math.min(spent / limitCents, 1) * 100);
+    else if (hasLimit && spent > 0) width = 100;
+    var amount = hasLimit
+      ? JobModel.formatMoney(spent) + " of " + JobModel.formatMoney(limitCents)
+      : "Spent " + JobModel.formatMoney(spent);
+    var remain = "";
+    if (hasLimit) {
+      var diff = limitCents - spent;
+      remain = "<p>" + esc(diff < 0 ? "Over " + JobModel.formatMoney(-diff) : "Left " + JobModel.formatMoney(diff)) + "</p>";
+    }
+    return "<div class=\"tracker" + (over ? " over" : "") + "\">" +
+      "<div class=\"tracker-top\"><span>" + esc(label) + "</span><span>" + esc(amount) + "</span></div>" +
+      (hasLimit ? "<div class=\"track\"><span style=\"width:" + width + "%\"></span></div>" + remain : "") +
+      "</div>";
+  }
+
+  function budgetPage() {
+    var budgets = (data().settings.budgets || []).slice().sort(function (a, b) {
+      return a.name.localeCompare(b.name, undefined, { numeric: true });
+    });
+    return "<h2 class=\"page-title\">Budget</h2>" +
+      (budgets.map(budgetCard).join("") || "<p class=\"muted\">No budget yet. Set a total, then add each billing code and its limit.</p>");
+  }
+
+  function budgetCard(budget) {
+    var spent = JobModel.budgetSpentCents(data().work, budget);
+    var notices = JobModel.budgetNotices(data().settings, data().work, today()).filter(function (notice) {
+      return notice.budgetId === budget.id;
+    });
+    var lines = budgetCodes(budget).map(function (code) {
+      return tracker(code.code, JobModel.spentCents(data().work, code.id), code.limitCents);
+    }).join("");
+    return "<article class=\"card\">" +
+      "<div class=\"job-top\"><strong>" + esc(budget.name) + "</strong></div>" +
+      "<p>" + esc(prettyDate(budget.starts) + " – " + prettyDate(budget.ends)) + "</p>" +
+      tracker("Total", spent, budget.totalCents == null ? null : budget.totalCents) +
+      lines +
+      budgetNoticeHtml(notices) +
+      (userCanCreate() ? "<button type=\"button\" class=\"text\" data-action=\"edit-budget\" data-id=\"" + esc(budget.id) + "\">Edit</button>" : "") +
+      "</article>";
+  }
+
+  function blankCode() {
+    return { id: "", code: "", limit: "" };
+  }
+
+  function draftFromBudget(budget) {
+    var codes = budgetCodes(budget).map(function (code) {
+      return { id: code.id || "", code: code.code, limit: moneyInput(code.limitCents) };
+    });
+    if (!codes.length) codes = [blankCode()];
+    return {
+      name: budget ? budget.name : "",
+      total: budget && budget.totalCents != null ? moneyInput(budget.totalCents) : "",
+      starts: budget ? budget.starts : "",
+      ends: budget ? budget.ends : "",
+      codes: codes
+    };
+  }
+
+  function readBudgetDraft() {
+    var form = document.getElementById("budget-form");
+    if (!form) return budgetDraft || draftFromBudget(null);
+    var codes = [];
+    form.querySelectorAll("[data-code-row]").forEach(function (row) {
+      codes.push({
+        id: row.querySelector("[name=codeId]").value,
+        code: row.querySelector("[name=code]").value,
+        limit: row.querySelector("[name=limit]").value
+      });
+    });
+    return {
+      name: form.querySelector("[name=name]").value,
+      total: form.querySelector("[name=total]").value,
+      starts: form.querySelector("[name=starts]").value,
+      ends: form.querySelector("[name=ends]").value,
+      codes: codes.length ? codes : [blankCode()]
+    };
+  }
+
+  function budgetForm() {
+    var budget = view.id ? JobModel.findBudget(data().settings, view.id) : null;
+    if (view.id && !budget) return "<p>That budget is gone.</p>";
+    if (!budgetDraft) budgetDraft = draftFromBudget(budget);
+    var draft = budgetDraft;
+    var rows = draft.codes.map(function (code, index) {
+      return "<div class=\"code-row\" data-code-row>" +
+        "<input type=\"hidden\" name=\"codeId\" value=\"" + esc(code.id) + "\">" +
+        "<label>Billing Code<input name=\"code\" autocomplete=\"off\" value=\"" + esc(code.code) + "\"></label>" +
+        "<label>Limit<input name=\"limit\" inputmode=\"decimal\" autocomplete=\"off\" value=\"" + esc(code.limit) + "\" placeholder=\"0.00\"></label>" +
+        "<button type=\"button\" class=\"text\" data-action=\"remove-code\" data-id=\"" + index + "\">Remove</button>" +
+        "</div>";
+    }).join("");
+    return "<form class=\"card\" id=\"budget-form\">" +
+      "<h2>" + (budget ? "Edit Budget" : "New Budget") + "</h2>" +
+      field("Name", "name", draft.name) +
+      "<label>Total Budget<input name=\"total\" inputmode=\"decimal\" autocomplete=\"off\" value=\"" + esc(draft.total) + "\" placeholder=\"Optional\"></label>" +
+      "<label>Year Starts<input type=\"date\" name=\"starts\" required value=\"" + esc(draft.starts) + "\"></label>" +
+      "<label>Year Ends<input type=\"date\" name=\"ends\" required value=\"" + esc(draft.ends) + "\"></label>" +
+      "<h3>Billing Codes</h3>" + rows +
+      "<button type=\"button\" class=\"text\" data-action=\"add-code\">Add Billing Code</button>" +
+      "<div class=\"actions\"><button type=\"submit\"" + disabled() + ">Save</button>" +
+      "<button type=\"button\" class=\"text\" data-action=\"back\">Cancel</button></div></form>" +
+      (budget && userCanCreate() ? "<p class=\"actions\"><button type=\"button\" class=\"text danger\" data-action=\"remove-budget\" data-id=\"" + esc(budget.id) + "\"" + disabled() + ">Remove Budget</button></p>" : "");
   }
 
   function equipmentList() {
@@ -940,8 +1207,17 @@
     if (action === "settings") { settingsOpen = true; render(); return; }
     if (action === "close-settings") { settingsOpen = false; render(); return; }
     if (action === "theme") { applyTheme(themeDark() ? "light" : "dark"); render(); return; }
+    if (action === "set-create") {
+      if (!userCanManageAccess()) return;
+      var accessPerson = data().settings.people.find(function (person) { return person.id === id; });
+      if (!accessPerson) return;
+      enqueue(function () {
+        return saveOp({ type: "setCreateAccess", personId: id, canCreate: accessPerson.canCreate === false });
+      });
+    }
     if (action === "nav") {
       printOpen = false;
+      budgetDraft = null;
       view = { name: target.getAttribute("data-view") };
       dialog = null;
       render();
@@ -965,6 +1241,7 @@
       return;
     }
     if (action === "new-order") {
+      if (!userCanCreate()) return;
       settingsOpen = false;
       if (view.name === "open-orders" || view.name === "orders") listReturn = view.name;
       formOpenedAt = Date.now();
@@ -972,6 +1249,34 @@
       render();
     }
     if (action === "new-equipment") { view = { name: "equipment-form" }; render(); }
+    if (action === "new-budget") {
+      if (!userCanCreate()) return;
+      budgetDraft = draftFromBudget(null);
+      view = { name: "budget-form" };
+      render();
+    }
+    if (action === "edit-budget") {
+      if (!userCanCreate()) return;
+      budgetDraft = draftFromBudget(JobModel.findBudget(data().settings, id));
+      view = { name: "budget-form", id: id };
+      render();
+    }
+    if (action === "add-code") {
+      budgetDraft = readBudgetDraft();
+      budgetDraft.codes.push(blankCode());
+      render();
+    }
+    if (action === "remove-code") {
+      budgetDraft = readBudgetDraft();
+      budgetDraft.codes.splice(Number(id), 1);
+      if (!budgetDraft.codes.length) budgetDraft.codes.push(blankCode());
+      render();
+    }
+    if (action === "remove-budget") {
+      enqueue(function () {
+        return saveOp({ type: "removeBudget", id: id }, function () { view = { name: "budget" }; });
+      });
+    }
     if (action === "open-order") {
       if (view.name === "open-orders" || view.name === "orders") listReturn = view.name;
       view = { name: "order", id: id };
@@ -987,7 +1292,11 @@
     if (action === "edit-equipment") { view = { name: "equipment-form", id: id }; render(); }
     if (action === "back") {
       printOpen = false;
-      view = view.id && view.name === "order-form" ? { name: "order", id: view.id } : { name: view.name.indexOf("equipment") === 0 ? "equipment" : (listReturn || "orders") };
+      if (view.name.indexOf("budget") === 0) budgetDraft = null;
+      if (view.name === "order-form" && view.id) view = { name: "order", id: view.id };
+      else if (view.name.indexOf("equipment") === 0) view = { name: "equipment" };
+      else if (view.name.indexOf("budget") === 0) view = { name: "budget" };
+      else view = { name: listReturn || "orders" };
       render();
     }
     if (action === "print") { printOpen = true; render(); return; }
@@ -1004,6 +1313,10 @@
       enqueue(function () { return saveOp({ type: "removeStep", orderId: removeId, stepId: id }); });
     }
     if (action === "unlink") enqueue(function () { return saveOp({ type: "unlinkAttachment", attachmentId: id }); });
+    if (action === "remove-purchase") {
+      var purchaseOrderId = view.id;
+      enqueue(function () { return saveOp({ type: "removePurchase", orderId: purchaseOrderId, purchaseId: id }); });
+    }
     if (action === "unfollow") {
       var unfollowOrder = view.id;
       enqueue(function () { return saveOp({ type: "setFollower", orderId: unfollowOrder, personId: id, following: false }); });
@@ -1085,6 +1398,46 @@
         });
       });
     }
+    if (form.id === "purchase-form") {
+      event.preventDefault();
+      var purchaseData = new FormData(form);
+      var purchaseOrder = view.id;
+      enqueue(function () {
+        return saveOp({
+          type: "addPurchase",
+          orderId: purchaseOrder,
+          budgetId: purchaseData.get("budgetId") || "",
+          cost: purchaseData.get("cost")
+        });
+      });
+    }
+    if (form.id === "budget-form") {
+      event.preventDefault();
+      var budgetData = new FormData(form);
+      var codes = [];
+      form.querySelectorAll("[data-code-row]").forEach(function (row) {
+        codes.push({
+          id: row.querySelector("[name=codeId]").value,
+          code: row.querySelector("[name=code]").value,
+          limit: row.querySelector("[name=limit]").value
+        });
+      });
+      var budgetOp = {
+        type: view.id ? "updateBudget" : "createBudget",
+        id: view.id,
+        name: budgetData.get("name"),
+        total: budgetData.get("total"),
+        starts: budgetData.get("starts"),
+        ends: budgetData.get("ends"),
+        codes: codes
+      };
+      enqueue(function () {
+        return saveOp(budgetOp, function () {
+          budgetDraft = null;
+          view = { name: "budget" };
+        });
+      });
+    }
     if (form.id === "equipment-form") {
       event.preventDefault();
       var equipmentData = new FormData(form);
@@ -1161,6 +1514,7 @@
     printOpen = false;
     dialog = null;
     search = "";
+    budgetDraft = null;
     homeMode = "activity";
     ordersMode = "list";
     view = { name: "orders" };

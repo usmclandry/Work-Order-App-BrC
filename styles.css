@@ -331,6 +331,9 @@ button.switch {
   background: var(--accent-ink);
 }
 
+.access { display: grid; gap: 0.55rem; margin-top: 0.9rem; }
+.access .switch { width: 100%; justify-content: space-between; }
+
 .name-form {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -346,7 +349,7 @@ button.switch {
 
 .tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 0.4rem;
   margin-top: 0.45rem;
 }
@@ -632,6 +635,44 @@ button.card, .card-button {
 .banner { box-shadow: none; padding: 0.55rem 0.65rem; }
 
 .banner.error { background: var(--error-bg); border-color: transparent; color: var(--error-fg); }
+
+button.banner {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  font-weight: 600;
+  white-space: normal;
+}
+
+.budget-alerts { display: grid; gap: 0.35rem; margin: 0.35rem 0 0.6rem; }
+
+.code-row {
+  display: grid;
+  grid-template-columns: 1fr 0.8fr auto;
+  gap: 0.45rem;
+  align-items: end;
+}
+
+.tracker { display: grid; gap: 0.2rem; }
+
+.tracker-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.86rem;
+}
+
+.track {
+  height: 0.35rem;
+  background: var(--line-soft);
+  border-radius: 2px;
+}
+
+.track > span { display: block; height: 100%; background: var(--c-go); }
+
+.tracker.over .track > span { background: var(--c-over); }
+
+.tracker p { margin: 0; color: var(--muted); font-size: 0.82rem; }
 
 .banner.ok { background: var(--ok-bg); border-color: transparent; color: var(--ok-fg); }
 

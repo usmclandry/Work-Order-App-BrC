@@ -278,9 +278,8 @@ test("only the owner can edit, and a step assignee can check off that step", fun
   assert.throws(function () {
     apply(current, { type: "toggleStep", orderId: "WO-001", stepId: "S-002" });
   }, /check off steps assigned to you/);
-  assert.throws(function () {
-    apply(current, { type: "setStatus", orderId: "WO-001", status: "done", text: "Finished" });
-  }, /Only the owner/);
+  current = apply(current, { type: "setStatus", orderId: "WO-001", status: "in_progress", text: "Started" });
+  assert.equal(current.work.orders[0].status, "in_progress");
   assert.throws(function () {
     apply(current, { type: "removeStep", orderId: "WO-001", stepId: "S-001" });
   }, /Only the owner/);
@@ -290,9 +289,8 @@ test("only the owner can edit, and a step assignee can check off that step", fun
   assert.equal(Model.ownerId(current.work.orders[0]), "github:alex");
   assert.deepEqual(current.work.orders[0].followers, []);
   current.actor = actor("jordan", "Jordan");
-  assert.throws(function () {
-    apply(current, { type: "addNote", orderId: "WO-001", text: "Still no" });
-  }, /follower/);
+  current = apply(current, { type: "addNote", orderId: "WO-001", text: "Still no" });
+  assert.equal(current.work.orders[0].notes[current.work.orders[0].notes.length - 1].text, "Still no");
 });
 
 test("repeating an order copies the work and leaves the notes behind", function () {
@@ -435,11 +433,155 @@ test("followers stay on the conversation and off the owner's list of edits", fun
   current.actor = actor("alex", "Alex");
   current = apply(current, { type: "addNote", orderId: "WO-001", text: "Still on it" });
   assert.equal(current.work.orders[0].notes[current.work.orders[0].notes.length - 1].by, "github:alex");
+  current = apply(current, { type: "setStatus", orderId: "WO-001", status: "waiting", text: "Hold" });
+  assert.equal(current.work.orders[0].status, "waiting");
+});
+
+test("only chosen accounts can create work orders and budgets", function () {
+  let current = seed();
+  assert.equal(current.settings.people[0].canCreate, true);
+  assert.equal(current.settings.people[1].canCreate, false);
+  current.actor = actor("jordan", "Jordan");
   assert.throws(function () {
-    apply(current, { type: "setStatus", orderId: "WO-001", status: "waiting", text: "Hold" });
-  }, /Only the owner/);
+    apply(current, {
+      type: "createOrder",
+      title: "Extra",
+      location: "Shop",
+      description: "Not allowed."
+    });
+  }, /can't create/);
+  assert.throws(function () {
+    apply(current, {
+      type: "createBudget",
+      name: "Shop",
+      total: "10",
+      starts: "2026-01-01",
+      ends: "2026-12-31",
+      codes: [{ code: "100", limit: "10" }]
+    });
+  }, /can't create/);
+  current.actor = actor("alex", "Alex");
+  assert.throws(function () {
+    apply(current, { type: "setCreateAccess", personId: "github:jordan", canCreate: true });
+  }, /Only Brandon/);
+  current.settings.people.push({
+    id: Model.accessManagerId,
+    githubLogin: "",
+    email: "",
+    displayName: "Brandon Landry",
+    canCreate: true
+  });
+  current.actor = {
+    id: Model.accessManagerId,
+    githubLogin: "",
+    email: "brandon@example.com",
+    displayName: "Brandon Landry"
+  };
+  current = apply(current, { type: "setCreateAccess", personId: "github:alex", canCreate: false });
+  assert.throws(function () {
+    apply(current, { type: "setCreateAccess", personId: Model.accessManagerId, canCreate: false });
+  }, /Someone has to be able to create/);
+  current = apply(current, { type: "setCreateAccess", personId: "github:jordan", canCreate: true });
+  current.actor = actor("jordan", "Jordan");
+  assert.throws(function () {
+    apply(current, { type: "setCreateAccess", personId: "github:jordan", canCreate: false });
+  }, /Only Brandon/);
+  current = apply(current, {
+    type: "createOrder",
+    title: "Extra",
+    location: "Shop",
+    description: "Allowed now."
+  });
+  assert.equal(current.work.orders[1].id, "WO-002");
 });
 
 test("safe filenames drop path pieces", function () {
   assert.equal(Model.safeFilename("../panel photo.jpg"), "panel-photo.jpg");
+});
+
+test("a budget holds several billing codes and warns when a limit, the total, or the year is passed", function () {
+  let current = seed();
+  current = apply(current, {
+    type: "createBudget",
+    name: "2026 Operating",
+    total: "100",
+    starts: "2026-01-01",
+    ends: "2026-12-31",
+    codes: [
+      { code: "7100", limit: "50" },
+      { code: "7200", limit: "40" }
+    ]
+  });
+  const budget = current.settings.budgets[0];
+  assert.equal(budget.id, "BD-001");
+  assert.equal(budget.totalCents, 10000);
+  assert.equal(budget.codes.length, 2);
+  assert.equal(budget.codes[0].id, "BC-001");
+  assert.equal(budget.codes[1].code, "7200");
+  assert.throws(function () {
+    apply(current, {
+      type: "updateBudget",
+      id: "BD-001",
+      name: "2026 Operating",
+      total: "100",
+      starts: "2026-01-01",
+      ends: "2026-12-31",
+      codes: [
+        { id: "BC-001", code: "7100", limit: "50" },
+        { code: "7100", limit: "10" }
+      ]
+    });
+  }, /already in this budget/);
+  current = apply(current, {
+    type: "createOrder",
+    title: "Replace filters",
+    location: "Student Building",
+    description: "Four filters."
+  });
+  current = apply(current, { type: "addPurchase", orderId: "WO-002", budgetId: "BC-001", cost: "40.50" });
+  assert.equal(current.work.orders[1].purchases[0].codeId, "BC-001");
+  assert.equal(Model.spentCents(current.work, "BC-001"), 4050);
+  assert.equal(Model.budgetSpentCents(current.work, budget), 4050);
+  assert.deepEqual(Model.budgetNotices(current.settings, current.work, "2026-06-01"), []);
+  current = apply(current, { type: "addPurchase", orderId: "WO-002", budgetId: "BC-001", cost: "19.50" });
+  assert.equal(Model.spentCents(current.work, "BC-001"), 6000);
+  current = apply(current, {
+    type: "createOrder",
+    title: "Paint",
+    location: "Hall",
+    description: "Touch up."
+  });
+  current = apply(current, { type: "addPurchase", orderId: "WO-003", budgetId: "BC-002", cost: "50" });
+  const notices = Model.budgetNotices(current.settings, current.work, "2026-06-01");
+  assert.equal(notices.filter(function (notice) { return notice.kind === "limit"; }).length, 2);
+  assert.equal(notices.some(function (notice) { return notice.kind === "total" && notice.over === 1000; }), true);
+  assert.equal(Model.budgetNotices(current.settings, current.work, "2027-01-01").some(function (notice) {
+    return notice.kind === "year";
+  }), true);
+  current = apply(current, { type: "setStatus", orderId: "WO-002", status: "canceled", text: "Not needed" });
+  current = apply(current, { type: "setStatus", orderId: "WO-003", status: "canceled", text: "Not needed" });
+  assert.equal(Model.budgetSpentCents(current.work, current.settings.budgets[0]), 0);
+  assert.deepEqual(Model.budgetNotices(current.settings, current.work, "2027-01-01"), []);
+  current = apply(current, {
+    type: "updateOrder",
+    id: "WO-001",
+    title: "Replace hose",
+    location: "Bay 2",
+    description: "Hydraulic hose is leaking.",
+    priority: "high",
+    dueDate: "2026-10-01",
+    tags: "hydraulic",
+    equipmentIds: ["EQ-14"],
+    repeat: "weekly"
+  });
+  current = apply(current, { type: "addPurchase", orderId: "WO-001", budgetId: "BC-002", cost: "12.00" });
+  current = apply(current, { type: "setStatus", orderId: "WO-001", status: "done", text: "Done" });
+  const repeated = current.work.orders.find(function (order) { return order.fromId === "WO-001"; });
+  assert.deepEqual(repeated.purchases, []);
+  assert.throws(function () {
+    apply(current, { type: "removeBudget", id: "BD-001" });
+  }, /still uses a billing code/);
+  assert.throws(function () {
+    apply(current, { type: "addPurchase", orderId: "WO-001", budgetId: "BC-999", cost: "5" });
+  }, /billing code/);
 });

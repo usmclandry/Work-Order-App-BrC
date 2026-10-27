@@ -296,6 +296,7 @@
     return !!(actor && actor.id);
   }
 
+  var MAX_PEOPLE = 10;
   var ACCESS_MANAGER_ID = "user:4bfda55b-dbec-4854-8731-ff75b7d913fd";
 
   function personCanCreate(settings, actor) {
@@ -522,8 +523,8 @@
         message = commitMessage(actor, "Update display name");
       } else if (op.type === "updateDisplayName") {
         throw new Error("Sign in before changing your name.");
-      } else if (settings.people.length >= 2) {
-        throw new Error("Only two people can use this app.");
+      } else if (settings.people.length >= MAX_PEOPLE) {
+        throw new Error("Only 10 people can use this app.");
       } else {
         settings.people.push({
           id: actor.id,
@@ -1127,6 +1128,7 @@
     personCanCreate: personCanCreate,
     canManageAccess: canManageAccess,
     accessManagerId: ACCESS_MANAGER_ID,
+    MAX_PEOPLE: MAX_PEOPLE,
     canCompleteStep: canCompleteStep,
     findPerson: findPerson,
     findAttachment: findAttachment,

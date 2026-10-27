@@ -48,21 +48,23 @@ function seed() {
   return current;
 }
 
-test("two people can join and a third cannot", function () {
-  const alex = actor("alex", "Alex");
-  let current = withPerson({
-    actor: alex,
+test("ten people can join and an eleventh cannot", function () {
+  let current = {
+    actor: actor("person1", "Person 1"),
     settings: Model.emptySettings(),
     equipment: Model.emptyEquipment(),
     work: Model.emptyWork()
-  }, alex);
-  current.actor = actor("jordan", "Jordan");
-  current = apply(current, { type: "addPerson", displayName: "Jordan" });
-  assert.equal(current.settings.people.length, 2);
-  current.actor = actor("sam", "Sam");
+  };
+  for (let n = 1; n <= 10; n++) {
+    current = withPerson(current, actor("person" + n, "Person " + n));
+  }
+  assert.equal(current.settings.people.length, 10);
+  assert.equal(current.settings.people[0].canCreate, true);
+  assert.equal(current.settings.people[9].canCreate, false);
+  current.actor = actor("person11", "Person 11");
   assert.throws(function () {
-    apply(current, { type: "addPerson", displayName: "Sam" });
-  }, /Only two people/);
+    apply(current, { type: "addPerson", displayName: "Person 11" });
+  }, /Only 10 people/);
 });
 
 test("creates an order stamped by the signed-in person and links equipment", function () {

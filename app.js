@@ -84,7 +84,7 @@
     await nextClient.load();
     var people = nextClient.snapshot().settings.people;
     var knownPerson = people.find(function (person) { return person.id === nextUser.id; });
-    if (!knownPerson && people.length >= 2) throw new Error("Only two people can use this app.");
+    if (!knownPerson && people.length >= JobModel.MAX_PEOPLE) throw new Error("Only 10 people can use this app.");
     if (knownPerson) nextUser.displayName = knownPerson.displayName;
     nextClient.setActor(nextUser);
     user = nextUser;

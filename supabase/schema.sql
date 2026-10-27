@@ -1,6 +1,6 @@
 -- Run this once in the Supabase SQL editor after creating a free project.
--- Then create the two people under Authentication → Users, and turn off
--- "Allow new users to sign up" so nobody else can open the data.
+-- Then add each person under Authentication → Users. The app allows 10.
+-- Turn off "Allow new users to sign up" so nobody else can open the data.
 
 create table if not exists public.app_state (
   id int primary key default 1 check (id = 1),

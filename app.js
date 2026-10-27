@@ -191,7 +191,7 @@
   function signIn() {
     var setup = JobSupabase.ready() ? "" : "<p class=\"setup\">Supabase is not connected on this copy of the page yet.</p>";
     return "<section class=\"gate\">" +
-      "<div class=\"gate-copy\"><h1>Broussard Campus</h1><p class=\"gate-lead\">Work orders and equipment.</p></div>" +
+      "<div class=\"gate-copy\"><h1>Broussard Campus</h1></div>" +
       banner() +
       "<form class=\"card\" id=\"sign-in\">" +
       "<label>Email<input id=\"email\" name=\"email\" type=\"email\" required autocomplete=\"username\" inputmode=\"email\"></label>" +

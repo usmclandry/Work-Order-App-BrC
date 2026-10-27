@@ -40,7 +40,7 @@ function seed() {
     location: "Bay 2",
     description: "Hydraulic hose is leaking.",
     priority: "high",
-    assignee: "github:jordan",
+    assignee: "github:alex",
     dueDate: "2026-10-01",
     tags: "hydraulic",
     equipmentIds: ["eq-14"]
@@ -73,7 +73,7 @@ test("creates an order stamped by the signed-in person and links equipment", fun
   assert.equal(order.log[0].by, "github:alex");
   assert.equal(order.log[0].type, "created");
   assert.equal(order.log[1].type, "assigned");
-  assert.equal(order.log[1].to, "github:jordan");
+  assert.equal(order.log[1].to, "github:alex");
   assert.equal(order.tags[0], "hydraulic");
   assert.equal(current.equipment.equipment[0].tags[1], "Hydraulic");
   assert.equal(current.message, "Add WO-001 by alex");
@@ -215,6 +215,229 @@ test("open orders sort overdue first and undated last", function () {
   });
   const sorted = Model.sortOrders(current.work.orders, "2026-10-15");
   assert.deepEqual(sorted.map(function (order) { return order.title; }), ["Replace hose", "Later", "No date"]);
+});
+
+test("steps stay on the order and do not follow its status", function () {
+  let current = seed();
+  delete current.work.orders[0].steps;
+  current = apply(current, { type: "addStep", orderId: "WO-001", text: "  Shut off the water  " });
+  current = apply(current, { type: "addStep", orderId: "WO-001", text: "Replace the hose" });
+  assert.equal(current.work.orders[0].steps[0].id, "S-001");
+  assert.equal(current.work.orders[0].steps[0].text, "Shut off the water");
+  assert.equal(current.work.orders[0].steps[0].done, false);
+  current = apply(current, { type: "toggleStep", orderId: "WO-001", stepId: "S-001" });
+  assert.equal(current.work.orders[0].steps[0].done, true);
+  assert.equal(current.work.orders[0].steps[0].doneBy, "github:alex");
+  assert.equal(current.work.orders[0].status, "new");
+  current = apply(current, { type: "toggleStep", orderId: "WO-001", stepId: "S-001" });
+  assert.equal(current.work.orders[0].steps[0].done, false);
+  assert.equal(current.work.orders[0].steps[0].doneBy, "");
+  current = apply(current, { type: "setStatus", orderId: "WO-001", status: "done", text: "Finished" });
+  assert.equal(current.work.orders[0].steps[1].done, false);
+  const found = Model.searchAll("replace the hose", current.settings, current.equipment, current.work);
+  assert.equal(found.orders.length, 1);
+  current = apply(current, { type: "removeStep", orderId: "WO-001", stepId: "S-002" });
+  assert.equal(current.work.orders[0].steps.length, 1);
+  assert.throws(function () {
+    apply(current, { type: "addStep", orderId: "WO-001", text: "   " });
+  }, /Enter a step/);
+});
+
+test("a step can be assigned without changing the order owner", function () {
+  let current = seed();
+  current = apply(current, { type: "addStep", orderId: "WO-001", text: "Bleed the line", assignee: "github:alex" });
+  assert.equal(current.work.orders[0].steps[0].assignee, "github:alex");
+  assert.equal(current.work.orders[0].assignee, "github:alex");
+  const found = Model.searchAll("alex", current.settings, current.equipment, current.work);
+  assert.equal(found.orders.length, 1);
+  current = apply(current, { type: "setStepAssignee", orderId: "WO-001", stepId: "S-001", assignee: "github:jordan" });
+  assert.equal(current.work.orders[0].steps[0].assignee, "github:jordan");
+  assert.equal(current.work.orders[0].assignee, "github:alex");
+  assert.equal(current.work.orders[0].log[current.work.orders[0].log.length - 1].type, "step-assigned");
+  assert.equal(current.work.orders[0].log[current.work.orders[0].log.length - 1].from, "github:alex");
+  current = apply(current, { type: "setStepAssignee", orderId: "WO-001", stepId: "S-001", assignee: "" });
+  assert.equal(current.work.orders[0].steps[0].assignee, "");
+  assert.throws(function () {
+    apply(current, { type: "setStepAssignee", orderId: "WO-001", stepId: "S-001", assignee: "github:sam" });
+  }, /Choose a person/);
+});
+
+test("only the owner can edit, and a step assignee can check off that step", function () {
+  let current = seed();
+  assert.deepEqual(current.work.orders[0].followers, ["github:jordan"]);
+  current.actor = actor("jordan", "Jordan");
+  current = apply(current, { type: "addNote", orderId: "WO-001", text: "Seen it" });
+  assert.equal(current.work.orders[0].notes[0].by, "github:jordan");
+  current.actor = actor("alex", "Alex");
+  current = apply(current, { type: "addStep", orderId: "WO-001", text: "Bleed the line", assignee: "github:jordan" });
+  current = apply(current, { type: "addStep", orderId: "WO-001", text: "Close the valve" });
+  current.actor = actor("jordan", "Jordan");
+  current = apply(current, { type: "toggleStep", orderId: "WO-001", stepId: "S-001" });
+  assert.equal(current.work.orders[0].steps[0].done, true);
+  assert.equal(current.work.orders[0].steps[0].doneBy, "github:jordan");
+  assert.throws(function () {
+    apply(current, { type: "toggleStep", orderId: "WO-001", stepId: "S-002" });
+  }, /check off steps assigned to you/);
+  assert.throws(function () {
+    apply(current, { type: "setStatus", orderId: "WO-001", status: "done", text: "Finished" });
+  }, /Only the owner/);
+  assert.throws(function () {
+    apply(current, { type: "removeStep", orderId: "WO-001", stepId: "S-001" });
+  }, /Only the owner/);
+  current.actor = actor("alex", "Alex");
+  current = apply(current, { type: "setFollower", orderId: "WO-001", personId: "github:jordan", following: false });
+  current = apply(current, { type: "setAssignee", orderId: "WO-001", assignee: "" });
+  assert.equal(Model.ownerId(current.work.orders[0]), "github:alex");
+  assert.deepEqual(current.work.orders[0].followers, []);
+  current.actor = actor("jordan", "Jordan");
+  assert.throws(function () {
+    apply(current, { type: "addNote", orderId: "WO-001", text: "Still no" });
+  }, /follower/);
+});
+
+test("repeating an order copies the work and leaves the notes behind", function () {
+  let current = seed();
+  current = apply(current, { type: "updateOrder", id: "WO-001", title: "Replace hose", location: "Bay 2", description: "Hydraulic hose is leaking.", priority: "high", dueDate: "2026-10-01", tags: "hydraulic", equipmentIds: ["EQ-14"], repeat: "weekly" });
+  current = apply(current, { type: "addStep", orderId: "WO-001", text: "Shut the water off", assignee: "github:jordan" });
+  current = apply(current, { type: "toggleStep", orderId: "WO-001", stepId: "S-001" });
+  current = apply(current, { type: "addNote", orderId: "WO-001", text: "Waiting on the part" });
+  current = apply(current, { type: "addAttachment", orderId: "WO-001", filename: "hose.jpg", kind: "image" });
+  current = apply(current, { type: "setStatus", orderId: "WO-001", status: "done", text: "Hose replaced" });
+  const finished = current.work.orders[0];
+  const next = current.work.orders[1];
+  assert.equal(finished.status, "done");
+  assert.equal(finished.nextId, "WO-002");
+  assert.equal(finished.notes.length, 2);
+  assert.equal(finished.attachmentIds.length, 1);
+  assert.equal(finished.steps[0].done, true);
+  assert.equal(next.id, "WO-002");
+  assert.equal(next.status, "new");
+  assert.equal(next.fromId, "WO-001");
+  assert.equal(next.dueDate, "2026-10-08");
+  assert.equal(next.repeat, "weekly");
+  assert.equal(next.assignee, "github:alex");
+  assert.equal(next.title, "Replace hose");
+  assert.equal(next.description, "Hydraulic hose is leaking.");
+  assert.deepEqual(next.tags, ["hydraulic"]);
+  assert.deepEqual(next.equipmentIds, ["EQ-14"]);
+  assert.equal(next.notes.length, 0);
+  assert.deepEqual(next.followers, ["github:jordan"]);
+  assert.equal(next.attachmentIds.length, 0);
+  assert.equal(next.steps.length, 1);
+  assert.equal(next.steps[0].id, "S-001");
+  assert.equal(next.steps[0].text, "Shut the water off");
+  assert.equal(next.steps[0].assignee, "github:jordan");
+  assert.equal(next.steps[0].done, false);
+  assert.equal(next.log[0].type, "repeated");
+  assert.equal(next.log[0].from, "WO-001");
+  assert.equal(finished.log[finished.log.length - 1].to, "WO-002");
+  current = apply(current, { type: "setStatus", orderId: "WO-001", status: "in_progress" });
+  current = apply(current, { type: "setStatus", orderId: "WO-001", status: "done", text: "Done again" });
+  assert.equal(current.work.orders.length, 2);
+  current = apply(current, { type: "retireEquipment", id: "EQ-14", note: "Sold" });
+  current = apply(current, { type: "setStatus", orderId: "WO-002", status: "done", text: "Next week done" });
+  assert.equal(current.work.orders[2].id, "WO-003");
+  assert.deepEqual(current.work.orders[2].equipmentIds, []);
+  assert.equal(current.work.orders[2].dueDate, "2026-10-15");
+  current.actor = actor("jordan", "Jordan");
+  assert.throws(function () {
+    apply(current, { type: "updateOrder", id: "WO-003", title: "Replace hose", location: "Bay 2", description: "Hydraulic hose is leaking.", priority: "high", dueDate: "2026-10-15", repeat: "monthly" });
+  }, /Only the owner/);
+});
+
+test("a canceled order does not start the next one", function () {
+  let current = seed();
+  current = apply(current, { type: "updateOrder", id: "WO-001", title: "Replace hose", location: "Bay 2", description: "Hydraulic hose is leaking.", priority: "high", dueDate: "2026-10-01", tags: "hydraulic", equipmentIds: ["EQ-14"], repeat: "monthly" });
+  current = apply(current, { type: "setStatus", orderId: "WO-001", status: "canceled", text: "No longer needed" });
+  assert.equal(current.work.orders.length, 1);
+  assert.equal(current.work.orders[0].nextId, "");
+});
+
+test("an order with no due date repeats from the day it is finished", function () {
+  let current = seed();
+  current = apply(current, {
+    type: "createOrder",
+    title: "Check the filters",
+    location: "Mechanical room",
+    description: "Look at the filters.",
+    repeat: "weekly"
+  });
+  current = apply(current, { type: "setStatus", orderId: "WO-002", status: "done", text: "Checked" });
+  const finished = current.work.orders[1];
+  const next = current.work.orders[2];
+  const completedOn = new Date(finished.completedAt);
+  const month = String(completedOn.getMonth() + 1).padStart(2, "0");
+  const day = String(completedOn.getDate()).padStart(2, "0");
+  const stamp = completedOn.getFullYear() + "-" + month + "-" + day;
+  assert.equal(next.dueDate, Model.nextDueDate("", "weekly", stamp));
+  assert.equal(Model.ownerId(next), "github:alex");
+});
+
+test("the next due date keeps the schedule", function () {
+  assert.equal(Model.nextDueDate("2026-10-01", "biweekly", "2026-10-20"), "2026-10-15");
+  assert.equal(Model.nextDueDate("2026-01-31", "monthly", "2026-02-02"), "2026-02-28");
+  assert.equal(Model.nextDueDate("2026-03-31", "monthly", "2026-04-01"), "2026-04-30");
+  assert.equal(Model.nextDueDate("2024-01-31", "monthly", "2024-02-01"), "2024-02-29");
+  assert.equal(Model.nextDueDate("2026-12-15", "monthly", "2026-12-15"), "2027-01-15");
+  assert.equal(Model.nextDueDate("2026-01-31", "quarterly", "2026-02-01"), "2026-04-30");
+  assert.equal(Model.nextDueDate("2026-01-15", "semiannual", "2026-01-15"), "2026-07-15");
+  assert.equal(Model.nextDueDate("2026-08-31", "semiannual", "2026-09-01"), "2027-02-28");
+  assert.equal(Model.nextDueDate("2024-02-29", "annual", "2024-03-01"), "2025-02-28");
+  assert.equal(Model.nextDueDate("2026-10-21", "annual", "2026-10-21"), "2027-10-21");
+  assert.throws(function () {
+    apply(seed(), {
+      type: "createOrder",
+      title: "Bad",
+      location: "Bay",
+      description: "Nope.",
+      repeat: "daily"
+    });
+  }, /how often/);
+});
+
+test("my tasks group into today, this week, upcoming, and recent", function () {
+  const orders = [
+    { id: "late", status: "new", dueDate: "2026-10-10", priority: "low", createdAt: "2026-10-01" },
+    { id: "today", status: "waiting", dueDate: "2026-10-16", priority: "normal", createdAt: "2026-10-02" },
+    { id: "morrow", status: "new", dueDate: "2026-10-17", priority: "high", createdAt: "2026-10-03" },
+    { id: "soon", status: "in_progress", dueDate: "2026-10-21", priority: "high", createdAt: "2026-10-04" },
+    { id: "none", status: "new", dueDate: "", priority: "low", createdAt: "2026-10-05" },
+    { id: "finished", status: "done", dueDate: "2026-10-14", priority: "high", createdAt: "2026-10-06", completedAt: "2026-10-15T18:00:00.000Z" },
+    { id: "old", status: "done", dueDate: "2026-09-01", priority: "normal", createdAt: "2026-09-01", completedAt: "2026-09-02T18:00:00.000Z" },
+    { id: "canceled", status: "canceled", dueDate: "2026-10-16", priority: "normal", createdAt: "2026-10-01" }
+  ];
+  const groups = Model.taskGroups(orders, "2026-10-16");
+  assert.deepEqual(groups.today.map(function (order) { return order.id; }), ["late", "today"]);
+  assert.deepEqual(groups.week.map(function (order) { return order.id; }), ["morrow"]);
+  assert.deepEqual(groups.upcoming.map(function (order) { return order.id; }), ["soon", "none"]);
+  assert.deepEqual(groups.recent.map(function (order) { return order.id; }), ["finished"]);
+  const onToday = Model.ordersForDay(orders, "2026-10-16", "2026-10-16");
+  assert.deepEqual(onToday.map(function (order) { return order.id; }), ["late", "today"]);
+  const onPast = Model.ordersForDay(orders, "2026-10-10", "2026-10-16");
+  assert.deepEqual(onPast.map(function (order) { return order.id; }), ["late"]);
+});
+
+test("followers stay on the conversation and off the owner's list of edits", function () {
+  let current = seed();
+  current.actor = actor("jordan", "Jordan");
+  assert.throws(function () {
+    apply(current, { type: "setFollower", orderId: "WO-001", personId: "github:jordan", following: true });
+  }, /Only the owner/);
+  current = apply(current, { type: "setFollower", orderId: "WO-001", personId: "github:jordan", following: false });
+  assert.deepEqual(current.work.orders[0].followers, []);
+  assert.equal(current.work.orders[0].log[current.work.orders[0].log.length - 1].type, "unfollowed");
+  current.actor = actor("alex", "Alex");
+  current = apply(current, { type: "addNote", orderId: "WO-001", text: "Ask @Jordan to look" });
+  assert.deepEqual(current.work.orders[0].followers, ["github:jordan"]);
+  current = apply(current, { type: "setAssignee", orderId: "WO-001", assignee: "github:jordan" });
+  assert.equal(current.work.orders[0].assignee, "github:jordan");
+  assert.deepEqual(current.work.orders[0].followers, ["github:alex"]);
+  current.actor = actor("alex", "Alex");
+  current = apply(current, { type: "addNote", orderId: "WO-001", text: "Still on it" });
+  assert.equal(current.work.orders[0].notes[current.work.orders[0].notes.length - 1].by, "github:alex");
+  assert.throws(function () {
+    apply(current, { type: "setStatus", orderId: "WO-001", status: "waiting", text: "Hold" });
+  }, /Only the owner/);
 });
 
 test("safe filenames drop path pieces", function () {

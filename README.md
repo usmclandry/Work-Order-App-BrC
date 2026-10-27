@@ -1,18 +1,26 @@
 # Job site work orders
 
-Phone page for a two-person work order list. This repo is the page only. Orders, equipment, and files stay in the private repo `job-site-work-orders`.
+Phone page for a two-person work order list. The layout is the Broussard Campus page: search, current orders, New order, and Orders / Equipment. Dark mode is in the settings gear.
 
-Open the published page:
+Orders, equipment, notes, and files are stored in Supabase. The page has no third-party scripts. It talks to Supabase with `fetch`.
 
-`https://brandonlandry-osc.github.io/job-site-work-orders-app/`
+## Connect a free Supabase project
 
-Sign in with:
+1. Create a project at [supabase.com](https://supabase.com) on the Free plan.
+2. Open the SQL editor and run `supabase/schema.sql`.
+3. Under Authentication → Users, add the two people with email and password. Turn on "Auto Confirm User" for each.
+4. Under Authentication → Sign In / Providers → Email, turn off "Allow new users to sign up".
+5. Under Project Settings → API, copy the project URL and the anon public key into `config.js`:
 
-- Private repo: `BrandonLandry-osc/job-site-work-orders`
-- A fine-grained GitHub token that can only read and write that private repo
+```js
+window.JOB_SUPABASE = {
+  url: "https://YOUR-PROJECT.supabase.co",
+  anonKey: "YOUR-ANON-KEY"
+};
+```
 
-The token stays in the browser. The page asks GitHub who the token belongs to and stamps every note, status change, file, and assignment with that person. The first two GitHub accounts to sign in become the two people.
+The anon key is meant to be in this page. Database rules still require a signed-in person. Do not put the service-role key in this repo or in the page.
 
-Create the token from the private repo's README. Sign out deletes it from this device.
+`styles.css` is loaded with `?v=13`, `config.js` with `?v=2`, `model.js` with `?v=2`, `supabase.js` with `?v=1`, and `app.js` with `?v=13`. Raise those numbers when you publish a change so phones pick up the new page. Dark mode is stored on the phone as `jsw.theme`.
 
-The page has no third-party scripts. `styles.css` and `app.js` are loaded with `?v=2`. `model.js` and `github.js` are loaded with `?v=1`. Raise those numbers when you publish a change so phones pick up the new page.
+The first two accounts to sign in become the two people. A third sign-in is refused. Sign out clears the session from this phone.

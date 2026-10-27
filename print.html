@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Print work order</title>
+  <link rel="stylesheet" href="styles.css?v=15">
+  <style>
+    html, body.print-page {
+      margin: 0;
+      background: #fff;
+      color: #1a1714;
+    }
+    body.print-page {
+      padding: 0.55in;
+    }
+    @media print {
+      body.print-page { padding: 0; }
+      .print-sheet {
+        max-width: none;
+        margin: 0;
+        padding: 0;
+        box-shadow: none;
+        border-radius: 0;
+      }
+    }
+  </style>
+</head>
+<body class="print-page">
+  <p class="print-missing">Open a work order and choose Print.</p>
+  <script>
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+      var raw = params.get("job");
+      if (!raw) return;
+      var job = JSON.parse(raw);
+      document.title = job.title || "Work order";
+      document.body.innerHTML = job.html || "";
+      function startPrint() {
+        setTimeout(function () { window.print(); }, 250);
+      }
+      if (document.readyState === "complete") startPrint();
+      else window.addEventListener("load", startPrint);
+    })();
+  </script>
+</body>
+</html>

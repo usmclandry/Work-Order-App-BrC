@@ -6,6 +6,7 @@
   var OPEN = ["new", "in_progress", "waiting"];
   var STATUSES = ["new", "in_progress", "waiting", "done", "canceled"];
   var PRIORITIES = ["low", "normal", "high"];
+  var REPEATS = ["weekly", "biweekly", "monthly", "quarterly", "semiannual", "annual"];
   var NEEDS_TEXT = ["waiting", "done", "canceled"];
 
   function personId(login) {
@@ -40,8 +41,12 @@
     if (!doc || doc.version !== 1) throw new Error(name + " is not version 1.");
   }
 
+  function actorTag(actor) {
+    return (actor && (actor.githubLogin || actor.email)) || "";
+  }
+
   function requireActor(actor) {
-    if (!actor || !actor.id || !actor.githubLogin) throw new Error("Sign in before saving.");
+    if (!actor || !actor.id || !actorTag(actor)) throw new Error("Sign in before saving.");
   }
 
   function nextNumberedId(prefix, ids) {
@@ -119,12 +124,188 @@
     return doc.orders.find(function (order) { return order.id === id; });
   }
 
+  function orderSteps(order) {
+    if (!Array.isArray(order.steps)) order.steps = [];
+    return order.steps;
+  }
+
+  function ownerId(order) {
+    if (order.assignee) return order.assignee;
+    var created = (order.log || []).find(function (line) {
+      return line.type === "created" || line.type === "repeated";
+    });
+    return (created && created.by) || "";
+  }
+
+  function repeatOf(value) {
+    var repeat = String(value || "").trim();
+    if (!repeat) return "";
+    if (REPEATS.indexOf(repeat) === -1) throw new Error("Choose how often this repeats.");
+    return repeat;
+  }
+
+  function localDate(iso) {
+    var date = new Date(iso);
+    var month = String(date.getMonth() + 1).padStart(2, "0");
+    var day = String(date.getDate()).padStart(2, "0");
+    return date.getFullYear() + "-" + month + "-" + day;
+  }
+
+  function addDays(isoDate, days) {
+    var parts = isoDate.split("-").map(Number);
+    var date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+  }
+
+  function addMonths(isoDate, months) {
+    var parts = isoDate.split("-").map(Number);
+    var cursor = new Date(Date.UTC(parts[0], parts[1] - 1 + months, 1));
+    var lastDay = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0)).getUTCDate();
+    var result = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), Math.min(parts[2], lastDay)));
+    return result.toISOString().slice(0, 10);
+  }
+
+  function nextDueDate(dueDate, repeat, completedOn) {
+    var base = dueDate || completedOn;
+    if (!base || !repeat) return "";
+    if (repeat === "weekly") return addDays(base, 7);
+    if (repeat === "biweekly") return addDays(base, 14);
+    if (repeat === "monthly") return addMonths(base, 1);
+    if (repeat === "quarterly") return addMonths(base, 3);
+    if (repeat === "semiannual") return addMonths(base, 6);
+    if (repeat === "annual") return addMonths(base, 12);
+    return "";
+  }
+
+  function activeEquipmentIds(equipment, ids) {
+    return (ids || []).map(function (id) {
+      return findEquipment(equipment, id);
+    }).filter(function (item) {
+      return item && item.status === "active";
+    }).map(function (item) {
+      return item.id;
+    });
+  }
+
+  function copySteps(steps) {
+    var copied = [];
+    (steps || []).forEach(function (step) {
+      copied.push({
+        id: nextNumberedId("S", copied.map(function (item) { return item.id; })),
+        text: step.text,
+        assignee: step.assignee || "",
+        done: false,
+        doneAt: null,
+        doneBy: ""
+      });
+    });
+    return copied;
+  }
+
+  function spawnNextOrder(work, equipment, actor, source) {
+    var orderId = nextNumberedId("WO", work.orders.map(function (order) { return order.id; }));
+    var order = {
+      id: orderId,
+      title: source.title,
+      location: source.location,
+      description: source.description,
+      priority: source.priority,
+      assignee: source.assignee,
+      status: "new",
+      dueDate: nextDueDate(source.dueDate, source.repeat, localDate(source.completedAt || nowIso())),
+      tags: (source.tags || []).slice(),
+      equipmentIds: activeEquipmentIds(equipment, source.equipmentIds),
+      attachmentIds: [],
+      notes: [],
+      steps: copySteps(source.steps),
+      followers: (source.followers || []).filter(function (id) {
+        return id && id !== (source.assignee || actor.id);
+      }),
+      repeat: source.repeat,
+      fromId: source.id,
+      nextId: "",
+      log: [logLine(actor, "repeated", { from: source.id })],
+      createdAt: nowIso(),
+      completedAt: null
+    };
+    source.nextId = orderId;
+    source.log.push(logLine(actor, "repeated", { to: orderId }));
+    work.orders.push(order);
+    return order;
+  }
+
+  function followerIds(order) {
+    if (!Array.isArray(order.followers)) order.followers = [];
+    return order.followers;
+  }
+
+  function addFollower(order, actor, personId) {
+    if (!personId || personId === ownerId(order)) return false;
+    var followers = followerIds(order);
+    if (followers.indexOf(personId) !== -1) return false;
+    followers.push(personId);
+    order.log.push(logLine(actor, "followed", { to: personId }));
+    return true;
+  }
+
+  function removeFollower(order, actor, personId) {
+    var followers = followerIds(order);
+    var index = followers.indexOf(personId);
+    if (index === -1) return false;
+    followers.splice(index, 1);
+    order.log.push(logLine(actor, "unfollowed", { from: personId }));
+    return true;
+  }
+
+  function mentionedIds(text, settings) {
+    var found = [];
+    (settings.people || []).forEach(function (person) {
+      var full = String(person.displayName || "").trim();
+      if (!full) return;
+      var first = full.split(/\s+/)[0];
+      var names = first && first.toLowerCase() !== full.toLowerCase() ? [full, first] : [full];
+      var hit = names.some(function (name) {
+        return new RegExp("(^|\\s)@" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?=$|\\s|[^A-Za-z0-9])", "i").test(text);
+      });
+      if (hit) found.push(person.id);
+    });
+    return found;
+  }
+
+  function canEditOrder(actor, order) {
+    var owner = ownerId(order);
+    return !owner || !!(actor && owner === actor.id);
+  }
+
+  function canCompleteStep(actor, order, step) {
+    if (canEditOrder(actor, order)) return true;
+    return !!(actor && step && step.assignee && step.assignee === actor.id);
+  }
+
+  function assertCanEdit(actor, order) {
+    if (!canEditOrder(actor, order)) throw new Error("Only the owner can edit this work order.");
+  }
+
+  function assertCanCompleteStep(actor, order, step) {
+    if (!canCompleteStep(actor, order, step)) throw new Error("You can only check off steps assigned to you.");
+  }
+
+  function canAddNote(actor, order) {
+    if (canEditOrder(actor, order)) return true;
+    return !!(actor && followerIds(order).indexOf(actor.id) !== -1);
+  }
+
+  function assertCanNote(actor, order) {
+    if (!canAddNote(actor, order)) throw new Error("Only the owner or a follower can add a note.");
+  }
+
   function findAttachment(doc, id) {
     return doc.attachments.find(function (item) { return item.id === id; });
   }
 
   function commitMessage(actor, text) {
-    return text + " by " + actor.githubLogin;
+    return text + " by " + actorTag(actor);
   }
 
   function apply(state, op) {
@@ -144,7 +325,7 @@
     }
 
     if (op.type === "addPerson" || op.type === "updateDisplayName") {
-      var displayName = String(op.displayName || actor.displayName || actor.githubLogin).trim() || actor.githubLogin;
+      var displayName = String(op.displayName || actor.displayName || actorTag(actor)).trim() || actorTag(actor);
       var existing = findPerson(settings, actor.id);
       if (existing) {
         existing.displayName = displayName;
@@ -156,7 +337,8 @@
       } else {
         settings.people.push({
           id: actor.id,
-          githubLogin: actor.githubLogin,
+          githubLogin: actor.githubLogin || "",
+          email: actor.email || "",
           displayName: displayName
         });
         message = commitMessage(actor, "Add person");
@@ -251,17 +433,26 @@
         equipmentIds: created.equipmentIds,
         attachmentIds: [],
         notes: [],
+        steps: [],
+        followers: [],
+        repeat: created.repeat,
+        fromId: "",
+        nextId: "",
         log: [logLine(actor, "created")],
         createdAt: createdAt,
         completedAt: null
       };
       if (created.assignee) order.log.push(logLine(actor, "assigned", { from: "", to: created.assignee }));
+      settings.people.forEach(function (person) {
+        if (person.id !== ownerId(order)) addFollower(order, actor, person.id);
+      });
       work.orders.push(order);
       touch("data/work.json");
       message = commitMessage(actor, "Add " + orderId);
     } else if (op.type === "updateOrder") {
       var editing = findOrder(work, op.id);
       if (!editing) throw new Error("Work order was not found.");
+      assertCanEdit(actor, editing);
       var fields = buildOrderFields(op, settings, equipment, editing);
       editing.title = fields.title;
       editing.location = fields.location;
@@ -270,31 +461,113 @@
       editing.dueDate = fields.dueDate;
       editing.tags = fields.tags;
       editing.equipmentIds = fields.equipmentIds;
+      editing.repeat = fields.repeat;
       touch("data/work.json");
       message = commitMessage(actor, "Update " + editing.id);
     } else if (op.type === "addNote") {
       var noted = findOrder(work, op.orderId);
       if (!noted) throw new Error("Work order was not found.");
+      assertCanNote(actor, noted);
       var noteText = String(op.text || "").trim();
       if (!noteText) throw new Error("Enter a note.");
       noted.notes.push({ at: nowIso(), by: actor.id, text: noteText });
+      mentionedIds(noteText, settings).forEach(function (personId) {
+        addFollower(noted, actor, personId);
+      });
       touch("data/work.json");
       message = commitMessage(actor, "Note on " + noted.id);
+    } else if (op.type === "setFollower") {
+      var followedOrder = findOrder(work, op.orderId);
+      if (!followedOrder) throw new Error("Work order was not found.");
+      var personId = op.personId || "";
+      if (!findPerson(settings, personId)) throw new Error("Choose a person.");
+      var adding = !!op.following;
+      var ownerHere = canEditOrder(actor, followedOrder);
+      if (!ownerHere && !(actor.id === personId && !adding)) throw new Error("Only the owner can change followers.");
+      if (personId === ownerId(followedOrder)) throw new Error("The owner is already on this order.");
+      var changed = adding ? addFollower(followedOrder, actor, personId) : removeFollower(followedOrder, actor, personId);
+      if (changed) {
+        touch("data/work.json");
+        message = commitMessage(actor, (adding ? "Follow " : "Unfollow ") + followedOrder.id);
+      }
+    } else if (op.type === "addStep") {
+      var stepOrder = findOrder(work, op.orderId);
+      if (!stepOrder) throw new Error("Work order was not found.");
+      assertCanEdit(actor, stepOrder);
+      var stepText = String(op.text || "").trim().replace(/\s+/g, " ");
+      if (!stepText) throw new Error("Enter a step.");
+      if (stepText.length > 200) throw new Error("That step is too long.");
+      var steps = orderSteps(stepOrder);
+      var stepAssignee = op.assignee || "";
+      if (stepAssignee && !findPerson(settings, stepAssignee)) throw new Error("Choose a person to assign.");
+      var stepId = nextNumberedId("S", steps.map(function (step) { return step.id; }));
+      steps.push({
+        id: stepId,
+        text: stepText,
+        assignee: stepAssignee,
+        done: false,
+        doneAt: null,
+        doneBy: ""
+      });
+      if (stepAssignee) {
+        stepOrder.log.push(logLine(actor, "step-assigned", { to: stepAssignee, text: stepText }));
+      }
+      touch("data/work.json");
+      message = commitMessage(actor, "Add step on " + stepOrder.id);
+    } else if (op.type === "toggleStep") {
+      var toggleOrder = findOrder(work, op.orderId);
+      if (!toggleOrder) throw new Error("Work order was not found.");
+      var step = orderSteps(toggleOrder).find(function (item) { return item.id === op.stepId; });
+      if (!step) throw new Error("That step was not found.");
+      assertCanCompleteStep(actor, toggleOrder, step);
+      step.done = !step.done;
+      step.doneAt = step.done ? nowIso() : null;
+      step.doneBy = step.done ? actor.id : "";
+      touch("data/work.json");
+      message = commitMessage(actor, (step.done ? "Finish step on " : "Reopen step on ") + toggleOrder.id);
+    } else if (op.type === "removeStep") {
+      var stepHost = findOrder(work, op.orderId);
+      if (!stepHost) throw new Error("Work order was not found.");
+      assertCanEdit(actor, stepHost);
+      var remaining = orderSteps(stepHost).filter(function (item) { return item.id !== op.stepId; });
+      if (remaining.length === stepHost.steps.length) throw new Error("That step was not found.");
+      stepHost.steps = remaining;
+      touch("data/work.json");
+      message = commitMessage(actor, "Remove step on " + stepHost.id);
+    } else if (op.type === "setStepAssignee") {
+      var stepAssignOrder = findOrder(work, op.orderId);
+      if (!stepAssignOrder) throw new Error("Work order was not found.");
+      var assignedStep = orderSteps(stepAssignOrder).find(function (item) { return item.id === op.stepId; });
+      if (!assignedStep) throw new Error("That step was not found.");
+      assertCanEdit(actor, stepAssignOrder);
+      var nextAssignee = op.assignee || "";
+      if (nextAssignee && !findPerson(settings, nextAssignee)) throw new Error("Choose a person to assign.");
+      var previousAssignee = assignedStep.assignee || "";
+      if (previousAssignee !== nextAssignee) {
+        assignedStep.assignee = nextAssignee;
+        stepAssignOrder.log.push(logLine(actor, "step-assigned", { from: previousAssignee, to: nextAssignee, text: assignedStep.text }));
+        touch("data/work.json");
+        message = commitMessage(actor, "Assign step on " + stepAssignOrder.id);
+      }
     } else if (op.type === "setAssignee") {
       var assignedOrder = findOrder(work, op.orderId);
       if (!assignedOrder) throw new Error("Work order was not found.");
+      assertCanEdit(actor, assignedOrder);
       var assignee = op.assignee || "";
       if (assignee && !findPerson(settings, assignee)) throw new Error("Choose a person to assign.");
       if (assignedOrder.assignee !== assignee) {
         var previous = assignedOrder.assignee;
         assignedOrder.assignee = assignee;
         assignedOrder.log.push(logLine(actor, "assigned", { from: previous, to: assignee }));
+        removeFollower(assignedOrder, actor, ownerId(assignedOrder));
+        if (previous) addFollower(assignedOrder, actor, previous);
         touch("data/work.json");
         message = commitMessage(actor, "Assign " + assignedOrder.id);
       }
     } else if (op.type === "setStatus") {
       var statusOrder = findOrder(work, op.orderId);
       if (!statusOrder) throw new Error("Work order was not found.");
+      assertCanEdit(actor, statusOrder);
       if (STATUSES.indexOf(op.status) === -1) throw new Error("Choose a status.");
       var reason = String(op.text || "").trim();
       if (NEEDS_TEXT.indexOf(op.status) !== -1 && !reason) throw new Error("Enter a reason.");
@@ -303,11 +576,15 @@
       statusOrder.completedAt = op.status === "done" ? nowIso() : null;
       if (reason) statusOrder.notes.push({ at: nowIso(), by: actor.id, text: reason });
       statusOrder.log.push(logLine(actor, "status", { from: previousStatus, to: op.status, text: reason }));
+      if (op.status === "done" && previousStatus !== "done" && statusOrder.repeat && !statusOrder.nextId) {
+        spawnNextOrder(work, equipment, actor, statusOrder);
+      }
       touch("data/work.json");
       message = commitMessage(actor, "Set " + statusOrder.id + " " + op.status);
     } else if (op.type === "addAttachment") {
       var host = findOrder(work, op.orderId);
       if (!host) throw new Error("Work order was not found.");
+      assertCanEdit(actor, host);
       var filename = String(op.filename || "").trim();
       if (!filename) throw new Error("Choose a file.");
       var attachmentId = nextNumberedId("ATT", work.attachments.map(function (item) { return item.id; }));
@@ -335,6 +612,7 @@
       if (attachment.removedAt) throw new Error("That file is already removed from the order.");
       attachment.removedAt = nowIso();
       var owner = findOrder(work, attachment.workOrderId);
+      if (owner) assertCanEdit(actor, owner);
       if (owner) owner.log.push(logLine(actor, "unlinked", { text: attachment.filename, to: attachment.id }));
       touch("data/work.json");
       message = commitMessage(actor, "Unlink " + attachment.id);
@@ -379,7 +657,8 @@
       dueDate: dueDate,
       assignee: assignee,
       tags: parseTags(op.tags),
-      equipmentIds: equipmentIds
+      equipmentIds: equipmentIds,
+      repeat: repeatOf(op.repeat)
     };
   }
 
@@ -406,6 +685,45 @@
     });
   }
 
+  function weekEnd(todayStamp) {
+    var parts = todayStamp.split("-").map(Number);
+    var date = new Date(parts[0], parts[1] - 1, parts[2]);
+    return addDays(todayStamp, 6 - date.getDay());
+  }
+
+  function taskGroups(orders, todayStamp) {
+    var saturday = weekEnd(todayStamp);
+    var recentStart = addDays(todayStamp, -14);
+    var groups = { today: [], week: [], upcoming: [], recent: [] };
+    (orders || []).forEach(function (order) {
+      if (order.status === "done" && order.completedAt) {
+        var finished = localDate(order.completedAt);
+        if (finished >= recentStart && finished <= todayStamp) groups.recent.push(order);
+        return;
+      }
+      if (!isOpenStatus(order.status)) return;
+      if (order.dueDate && order.dueDate > todayStamp && order.dueDate <= saturday) groups.week.push(order);
+      else if (!order.dueDate || order.dueDate > saturday) groups.upcoming.push(order);
+      else groups.today.push(order);
+    });
+    groups.today = sortOrders(groups.today, todayStamp);
+    groups.week = sortOrders(groups.week, todayStamp);
+    groups.upcoming = sortOrders(groups.upcoming, todayStamp);
+    groups.recent.sort(function (a, b) {
+      if (a.completedAt === b.completedAt) return 0;
+      return a.completedAt < b.completedAt ? 1 : -1;
+    });
+    return groups;
+  }
+
+  function ordersForDay(orders, day, todayStamp) {
+    return sortOrders((orders || []).filter(function (order) {
+      if (!isOpenStatus(order.status) || !order.dueDate) return false;
+      if (order.dueDate === day) return true;
+      return day === todayStamp && order.dueDate < todayStamp;
+    }), todayStamp);
+  }
+
   function orderHaystack(order, equipmentDoc, settings) {
     var equipmentText = (order.equipmentIds || []).map(function (id) {
       var item = findEquipment(equipmentDoc, id);
@@ -415,13 +733,23 @@
     var notes = (order.notes || []).map(function (note) { return note.text; }).join(" ");
     return [
       order.id,
+      order.fromId || "",
+      order.nextId || "",
       order.title,
       order.location,
       order.description,
       notes,
+      (order.steps || []).map(function (step) {
+        var owner = findPerson(settings, step.assignee);
+        return step.text + (owner ? " " + owner.displayName : "");
+      }).join(" "),
       (order.tags || []).join(" "),
       equipmentText,
-      person ? person.displayName + " " + person.githubLogin : ""
+      person ? person.displayName + " " + (person.githubLogin || "") + " " + (person.email || "") : "",
+      (order.followers || []).map(function (id) {
+        var follower = findPerson(settings, id);
+        return follower ? follower.displayName : id;
+      }).join(" ")
     ].join(" ").toLowerCase();
   }
 
@@ -462,6 +790,8 @@
     OPEN: OPEN,
     STATUSES: STATUSES,
     PRIORITIES: PRIORITIES,
+    REPEATS: REPEATS,
+    nextDueDate: nextDueDate,
     personId: personId,
     emptySettings: emptySettings,
     emptyEquipment: emptyEquipment,
@@ -472,12 +802,18 @@
     parseTags: parseTags,
     isOpenStatus: isOpenStatus,
     sortOrders: sortOrders,
+    taskGroups: taskGroups,
+    ordersForDay: ordersForDay,
     searchAll: searchAll,
     openOrderCount: openOrderCount,
     displayName: displayName,
     linkedAttachments: linkedAttachments,
     findEquipment: findEquipment,
     findOrder: findOrder,
+    ownerId: ownerId,
+    canEditOrder: canEditOrder,
+    canAddNote: canAddNote,
+    canCompleteStep: canCompleteStep,
     findPerson: findPerson,
     findAttachment: findAttachment
   };

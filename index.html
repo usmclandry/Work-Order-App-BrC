@@ -3,13 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Job site work orders</title>
-  <link rel="stylesheet" href="styles.css?v=2">
+  <title>Broussard Campus</title>
+  <script>
+    try {
+      if (localStorage.getItem("jsw.theme") === "dark") document.documentElement.setAttribute("data-theme", "dark");
+    } catch (error) {}
+  </script>
+  <link rel="stylesheet" href="styles.css?v=33">
 </head>
 <body>
   <div id="app"></div>
-  <script src="model.js?v=1"></script>
-  <script src="github.js?v=1"></script>
-  <script src="app.js?v=2"></script>
+  <script src="config.js?v=2"></script>
+  <script src="model.js?v=11"></script>
+  <script src="supabase.js?v=1"></script>
+  <script src="app.js?v=35"></script>
 </body>
 </html>

@@ -198,7 +198,6 @@
       "<label>Password<input id=\"password\" name=\"password\" type=\"password\" required autocomplete=\"current-password\"></label>" +
       "<button type=\"submit\"" + disabled() + ">Sign In</button>" +
       setup +
-      "<p class=\"muted\">The session stays on this phone.</p>" +
       "</form>" +
       themeToggle() +
       "</section>";
